@@ -40,22 +40,6 @@ const createApiClient = async () => {
   });
 };
 
-// Interface para os dados brutos da API
-interface RawPhoneData {
-  document: {
-    name: string;
-    fields: {
-      last_message: {
-        integerValue: string;
-      };
-    };
-    createTime: string;
-    updateTime: string;
-    id: string;
-  };
-  readTime: string;
-}
-
 // Interface para sugestão de IA
 interface AISuggestion {
   _name: string;
@@ -100,12 +84,20 @@ export const phoneService = {
       return phones;
     } catch (error) {
       console.error('Erro na requisição da API:', error);
-      console.error('Detalhes do erro:', {
-        message: error.message,
-        status: error.response?.status,
-        statusText: error.response?.statusText,
-        data: error.response?.data
-      });
+      
+      // Verificar se é um erro do axios
+      if (error && typeof error === 'object' && 'response' in error) {
+        const axiosError = error as any;
+        console.error('Detalhes do erro:', {
+          message: axiosError.message,
+          status: axiosError.response?.status,
+          statusText: axiosError.response?.statusText,
+          data: axiosError.response?.data
+        });
+      } else {
+        console.error('Erro desconhecido:', error);
+      }
+      
       throw error;
     }
   }

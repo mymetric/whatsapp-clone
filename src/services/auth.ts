@@ -41,7 +41,7 @@ class AuthService {
         }
       ];
       this.apiConfig = {
-        sendMessageUrl: "https://n8n.rosenbaum.adv.br/webhook-test/enviar-com-umbler"
+        sendMessageUrl: "https://n8n.rosenbaum.adv.br/webhook/enviar-com-umbler"
       };
     }
   }

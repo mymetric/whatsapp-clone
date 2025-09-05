@@ -1,8 +1,8 @@
 import axios from 'axios';
 import { Phone, Message } from '../types';
 
-const API_BASE_URL = 'https://n8n.rosenbaum.adv.br/webhook/api';
-const API_KEY = 'YY2pHUzcGUFKBmZ';
+const API_BASE_URL = 'https://api.exemplo.com/webhook/api';
+const API_KEY = 'sua-api-key-aqui';
 
 const api = axios.create({
   baseURL: API_BASE_URL,

@@ -1,5 +1,6 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { Phone } from '../types';
+import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import './ChatList.css';
 
 interface ChatListProps {

@@ -24,6 +24,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone }) => {
   const [newMessage, setNewMessage] = useState('');
   const [aiSuggestion, setAiSuggestion] = useState<AISuggestion | null>(null);
   const [showSuggestion, setShowSuggestion] = useState(false);
+  const [showFullSuggestion, setShowFullSuggestion] = useState(false);
+  const [showInput, setShowInput] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -83,12 +85,15 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone }) => {
     }
   }, [selectedPhone]);
 
-  // Scroll para o topo quando mudar de conversa
+  // Scroll para a última mensagem quando carregar mensagens de um contato
   useEffect(() => {
-    if (selectedPhone && messagesContainerRef.current) {
-      messagesContainerRef.current.scrollTop = 0;
+    if (messages.length > 0 && !loading) {
+      // Pequeno delay para garantir que o DOM foi atualizado
+      setTimeout(() => {
+        scrollToBottom(false);
+      }, 100);
     }
-  }, [selectedPhone]);
+  }, [messages, loading, scrollToBottom]);
 
   // Scroll para baixo apenas quando adicionar nova mensagem
   useEffect(() => {
@@ -165,6 +170,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone }) => {
         );
         
         console.log('✅ Mensagem enviada com sucesso');
+        setShowInput(false); // Ocultar caixa de texto após envio bem-sucedido
       } else {
         throw new Error(result.error || 'Erro ao enviar mensagem');
       }
@@ -196,6 +202,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone }) => {
     if (aiSuggestion) {
       setNewMessage(aiSuggestion.message);
       setShowSuggestion(false);
+      setShowInput(true); // Mostrar caixa de texto ao editar sugestão
       
       // Ajustar altura do textarea após definir o texto
       setTimeout(() => {
@@ -204,8 +211,89 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone }) => {
     }
   };
 
+  const handleShowInput = () => {
+    setShowInput(true);
+    // Focar no textarea após mostrar
+    setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+      }
+    }, 100);
+  };
+
+  const handleHideInput = () => {
+    setShowInput(false);
+    setNewMessage(''); // Limpar mensagem ao ocultar
+  };
+
   const handleDismissSuggestion = () => {
     setShowSuggestion(false);
+  };
+
+  const handleShowFullSuggestion = () => {
+    setShowFullSuggestion(true);
+  };
+
+  const handleCloseFullSuggestion = () => {
+    setShowFullSuggestion(false);
+  };
+
+  const truncateText = (text: string, maxLength: number = 350) => {
+    if (text.length <= maxLength) return text;
+    return text.substring(0, maxLength) + '...';
+  };
+
+  const handleSendSuggestion = async () => {
+    if (!aiSuggestion || !selectedPhone) return;
+    
+    const messageText = aiSuggestion.message;
+    setShowSuggestion(false);
+    
+    // Criar mensagem otimista (aparece imediatamente)
+    const optimisticMessage: Message = {
+      _name: '',
+      _id: `temp_${Date.now()}`,
+      _createTime: new Date().toISOString(),
+      _updateTime: new Date().toISOString(),
+      chat_phone: selectedPhone._id ? selectedPhone._id.replace('+', '') : '',
+      source: 'Member',
+      content: messageText
+    };
+    
+    setMessages(prev => [...prev, optimisticMessage]);
+    
+    try {
+      // Enviar mensagem via API real
+      const result = await messageService.sendMessage(selectedPhone._id, messageText);
+      
+      if (result.success) {
+        // Atualizar mensagem otimista com ID final
+        const finalMessage: Message = {
+          ...optimisticMessage,
+          _id: Date.now().toString(),
+          _createTime: new Date().toISOString(),
+          _updateTime: new Date().toISOString(),
+        };
+        
+        setMessages(prev => 
+          prev.map(msg => 
+            msg._id === optimisticMessage._id ? finalMessage : msg
+          )
+        );
+        
+        console.log('✅ Sugestão de IA enviada com sucesso');
+      } else {
+        throw new Error(result.error || 'Erro ao enviar sugestão');
+      }
+      
+    } catch (error) {
+      console.error('❌ Erro ao enviar sugestão de IA:', error);
+      // Remover mensagem otimista em caso de erro
+      setMessages(prev => prev.filter(msg => msg._id !== optimisticMessage._id));
+      
+      // Mostrar erro para o usuário
+      alert(`Erro ao enviar sugestão: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
+    }
   };
 
   if (!selectedPhone) {
@@ -278,47 +366,138 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone }) => {
             </button>
           </div>
           <div className="suggestion-content">
-            {aiSuggestion.message}
+            {truncateText(aiSuggestion.message)}
+            {aiSuggestion.message.length > 350 && (
+              <button 
+                className="see-more-btn"
+                onClick={handleShowFullSuggestion}
+              >
+                Ver mais
+              </button>
+            )}
           </div>
           <div className="suggestion-actions">
             <button 
               className="suggestion-use-btn" 
               onClick={handleUseSuggestion}
             >
-              Usar Sugestão
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
+              </svg>
+              Editar Sugestão
+            </button>
+            <button 
+              className="suggestion-send-btn" 
+              onClick={handleSendSuggestion}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+              </svg>
+              Enviar Sugestão
             </button>
           </div>
         </div>
       )}
 
-      <div className="chat-input">
-        <div className="input-container">
-          <textarea
-            ref={textareaRef}
-            value={newMessage}
-            onChange={handleInputChange}
-            onKeyPress={handleKeyPress}
-            placeholder="Digite uma mensagem..."
-            rows={1}
-            className="message-input"
-            disabled={loading}
-          />
-          <button
-            onClick={handleSendMessage}
-            disabled={!newMessage.trim() || loading}
-            className="send-button"
-            title="Enviar mensagem"
-          >
-            {loading ? (
-              <div className="send-loading"></div>
-            ) : (
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+      {/* Modal para texto completo da sugestão */}
+      {showFullSuggestion && aiSuggestion && (
+        <div className="suggestion-modal-overlay" onClick={handleCloseFullSuggestion}>
+          <div className="suggestion-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Sugestão de IA Completa</h3>
+              <button 
+                className="modal-close" 
+                onClick={handleCloseFullSuggestion}
+                title="Fechar"
+              >
+                ×
+              </button>
+            </div>
+            <div className="modal-content">
+              {aiSuggestion.message}
+            </div>
+            <div className="modal-actions">
+              <button 
+                className="modal-use-btn" 
+                onClick={() => {
+                  handleUseSuggestion();
+                  handleCloseFullSuggestion();
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
+                </svg>
+                Editar Sugestão
+              </button>
+              <button 
+                className="modal-send-btn" 
+                onClick={() => {
+                  handleSendSuggestion();
+                  handleCloseFullSuggestion();
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                </svg>
+                Enviar Sugestão
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showInput ? (
+        <div className="chat-input">
+          <div className="input-container">
+            <textarea
+              ref={textareaRef}
+              value={newMessage}
+              onChange={handleInputChange}
+              onKeyPress={handleKeyPress}
+              placeholder="Digite uma mensagem..."
+              rows={1}
+              className="message-input"
+              disabled={loading}
+            />
+            <button
+              onClick={handleSendMessage}
+              disabled={!newMessage.trim() || loading}
+              className="send-button"
+              title="Enviar mensagem"
+            >
+              {loading ? (
+                <div className="send-loading"></div>
+              ) : (
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                </svg>
+              )}
+            </button>
+            <button
+              onClick={handleHideInput}
+              className="hide-input-button"
+              title="Ocultar caixa de texto"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
               </svg>
-            )}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="chat-input-placeholder">
+          <button
+            onClick={handleShowInput}
+            className="show-input-button"
+            title="Escrever mensagem"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
+            </svg>
+            <span>Escrever mensagem</span>
           </button>
         </div>
-      </div>
+      )}
     </div>
   );
 };

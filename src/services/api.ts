@@ -13,15 +13,30 @@ const loadApiConfig = async (): Promise<ApiConfig> => {
   if (apiConfig) return apiConfig;
   
   try {
+    console.log('Tentando carregar credentials.json...');
     const response = await fetch('/credentials.json');
+    console.log('Status da resposta do credentials.json:', response.status);
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
     const data = await response.json();
+    console.log('Dados carregados do credentials.json:', data);
+    
+    if (!data.api || !data.api.baseUrl || !data.api.apiKey) {
+      throw new Error('Estrutura inválida do credentials.json');
+    }
+    
     apiConfig = {
       baseUrl: data.api.baseUrl,
       apiKey: data.api.apiKey
     };
+    console.log('Configuração da API carregada:', apiConfig);
     return apiConfig;
   } catch (error) {
     console.error('Erro ao carregar configurações da API:', error);
+    console.error('Usando fallback para desenvolvimento');
     // Fallback para desenvolvimento
     return {
       baseUrl: 'https://api.exemplo.com/webhook/api',

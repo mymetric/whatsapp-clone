@@ -271,6 +271,32 @@ dist
 EOF
 fi
 
+# Criar credentials.json se não existir
+if [ ! -f "credentials.json" ]; then
+    log "Criando credentials.json..."
+    cat > credentials.json << 'EOF'
+{
+  "users": [
+    {
+      "email": "accounts@mymetric.com.br",
+      "password": "hdaqzrf7rcK/ZLcoNDKhKiCbQKYSDkQqF+iuAfygro=",
+      "name": "MyMetric Accounts",
+      "role": "admin"
+    },
+    {
+      "email": "marketing@rosenbaum.adv.br",
+      "password": "wMe1lbDXeoFZzzeQTB2JwkQ53F4u8tsy9CLWx0v7vR4=",
+      "name": "Rosenbaum Marketing",
+      "role": "user"
+    }
+  ],
+  "api": {
+    "sendMessageUrl": "https://n8n.rosenbaum.adv.br/webhook/enviar-com-umbler"
+  }
+}
+EOF
+fi
+
 # Limpar imagens antigas
 log "Limpando imagens antigas..."
 docker image prune -f || true

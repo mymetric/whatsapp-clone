@@ -1,15 +1,44 @@
 import axios from 'axios';
 import { Phone, Message } from '../types';
 
-const API_BASE_URL = 'https://api.exemplo.com/webhook/api';
-const API_KEY = 'sua-api-key-aqui';
+interface ApiConfig {
+  baseUrl: string;
+  apiKey: string;
+}
 
-const api = axios.create({
-  baseURL: API_BASE_URL,
-  headers: {
-    'apikey': API_KEY
+let apiConfig: ApiConfig | null = null;
+
+// Carregar configurações da API do credentials.json
+const loadApiConfig = async (): Promise<ApiConfig> => {
+  if (apiConfig) return apiConfig;
+  
+  try {
+    const response = await fetch('/credentials.json');
+    const data = await response.json();
+    apiConfig = {
+      baseUrl: data.api.baseUrl,
+      apiKey: data.api.apiKey
+    };
+    return apiConfig;
+  } catch (error) {
+    console.error('Erro ao carregar configurações da API:', error);
+    // Fallback para desenvolvimento
+    return {
+      baseUrl: 'https://api.exemplo.com/webhook/api',
+      apiKey: 'sua-api-key-aqui'
+    };
   }
-});
+};
+
+const createApiClient = async () => {
+  const config = await loadApiConfig();
+  return axios.create({
+    baseURL: config.baseUrl,
+    headers: {
+      'apikey': config.apiKey
+    }
+  });
+};
 
 // Interface para os dados brutos da API
 interface RawPhoneData {
@@ -41,7 +70,9 @@ interface AISuggestion {
 export const phoneService = {
   async getPhones(): Promise<Phone[]> {
     try {
-      console.log('Fazendo requisição para:', `${API_BASE_URL}/phones`);
+      const api = await createApiClient();
+      const config = await loadApiConfig();
+      console.log('Fazendo requisição para:', `${config.baseUrl}/phones`);
       const response = await api.get<RawPhoneData[]>('/phones');
       console.log('Resposta da API:', response.data);
       
@@ -66,6 +97,7 @@ export const phoneService = {
 export const messageService = {
   async getMessages(phone: string): Promise<Message[]> {
     try {
+      const api = await createApiClient();
       console.log('Fazendo requisição para mensagens do telefone:', phone);
       const response = await api.get<Message[]>(`/messages?phone=%2B${phone}`);
       console.log('Resposta da API de mensagens:', response.data);
@@ -80,6 +112,7 @@ export const messageService = {
 export const aiSuggestionService = {
   async getLastAISuggestion(phone: string): Promise<AISuggestion | null> {
     try {
+      const api = await createApiClient();
       console.log('Fazendo requisição para sugestão de IA do telefone:', phone);
       const response = await api.get<AISuggestion[]>(`/last_ai_suggestion?phone=%2B${phone}`);
       console.log('Resposta da API de sugestão de IA:', response.data);

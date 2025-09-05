@@ -271,30 +271,34 @@ dist
 EOF
 fi
 
-# Criar credentials.json se não existir
+# Verificar se credentials.json existe
 if [ ! -f "credentials.json" ]; then
-    log "Criando credentials.json..."
-    cat > credentials.json << 'EOF'
-{
-  "users": [
-    {
-      "email": "accounts@mymetric.com.br",
-      "password": "hdaqzrf7rcK/ZLcoNDKhKiCbQKYSDkQqF+iuAfygro=",
-      "name": "MyMetric Accounts",
-      "role": "admin"
-    },
-    {
-      "email": "marketing@rosenbaum.adv.br",
-      "password": "wMe1lbDXeoFZzzeQTB2JwkQ53F4u8tsy9CLWx0v7vR4=",
-      "name": "Rosenbaum Marketing",
-      "role": "user"
-    }
-  ],
-  "api": {
-    "sendMessageUrl": "https://n8n.rosenbaum.adv.br/webhook/enviar-com-umbler"
-  }
-}
-EOF
+    warning "Arquivo credentials.json não encontrado!"
+    warning "Crie o arquivo credentials.json com as credenciais necessárias:"
+    echo ""
+    if [ -f "credentials.json.example" ]; then
+        echo "Use o arquivo de exemplo:"
+        echo "cp credentials.json.example credentials.json"
+        echo ""
+        echo "Depois edite o arquivo credentials.json com suas credenciais reais."
+    else
+        echo "Exemplo de credentials.json:"
+        echo "{"
+        echo "  \"users\": ["
+        echo "    {"
+        echo "      \"email\": \"seu-email@exemplo.com\","
+        echo "      \"password\": \"sua-senha-criptografada\","
+        echo "      \"name\": \"Seu Nome\","
+        echo "      \"role\": \"admin\""
+        echo "    }"
+        echo "  ],"
+        echo "  \"api\": {"
+        echo "    \"sendMessageUrl\": \"https://sua-api.com/webhook\""
+        echo "  }"
+        echo "}"
+    fi
+    echo ""
+    error "Deploy cancelado. Crie o arquivo credentials.json primeiro."
 fi
 
 # Limpar imagens antigas

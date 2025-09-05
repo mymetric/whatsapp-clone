@@ -73,8 +73,19 @@ export const phoneService = {
       const api = await createApiClient();
       const config = await loadApiConfig();
       console.log('Fazendo requisição para:', `${config.baseUrl}/phones`);
-      const response = await api.get<RawPhoneData[]>('/phones');
-      console.log('Resposta da API:', response.data);
+      const response = await api.get('/phones');
+      console.log('Status da resposta:', response.status);
+      console.log('Headers da resposta:', response.headers);
+      console.log('Resposta da API (completa):', response);
+      console.log('Tipo de response.data:', typeof response.data);
+      console.log('É array?', Array.isArray(response.data));
+      console.log('Resposta da API (data):', response.data);
+      
+      // Verificar se response.data é um array
+      if (!Array.isArray(response.data)) {
+        console.error('Erro: response.data não é um array:', response.data);
+        return [];
+      }
       
       // Transformar os dados da API no formato esperado pela aplicação
       const phones: Phone[] = response.data.map((item) => ({
@@ -89,6 +100,12 @@ export const phoneService = {
       return phones;
     } catch (error) {
       console.error('Erro na requisição da API:', error);
+      console.error('Detalhes do erro:', {
+        message: error.message,
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data
+      });
       throw error;
     }
   }

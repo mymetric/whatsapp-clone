@@ -92,7 +92,8 @@ export const phoneService = {
         _id: item.document.id,
         _createTime: item.document.createTime,
         _updateTime: item.document.updateTime,
-        last_message: item.document.fields.last_message.integerValue
+        last_message: item.document.fields.last_message.integerValue,
+        lead_name: item.document.fields.lead_name?.stringValue || undefined
       }));
       
       console.log('Dados transformados:', phones);

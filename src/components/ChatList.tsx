@@ -29,9 +29,11 @@ const ChatList: React.FC<ChatListProps> = ({ phones, selectedPhone, onSelectPhon
     return phones.filter(phone => {
       const phoneNumber = phone._id || '';
       const lastMessage = phone.last_message || '';
+      const leadName = phone.lead_name || '';
       
       return phoneNumber.toLowerCase().includes(searchLower) ||
-             lastMessage.toLowerCase().includes(searchLower);
+             lastMessage.toLowerCase().includes(searchLower) ||
+             leadName.toLowerCase().includes(searchLower);
     });
   }, [phones, searchTerm]);
 
@@ -68,7 +70,7 @@ const ChatList: React.FC<ChatListProps> = ({ phones, selectedPhone, onSelectPhon
         <div className="search-container">
           <input
             type="text"
-            placeholder="Buscar por telefone ou mensagem..."
+            placeholder="Buscar por nome, telefone ou mensagem..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="search-input"
@@ -93,7 +95,16 @@ const ChatList: React.FC<ChatListProps> = ({ phones, selectedPhone, onSelectPhon
               </div>
             </div>
             <div className="chat-info">
-              <div className="chat-name">{formatPhoneNumber(phone._id)}</div>
+              <div className="chat-name">
+                {phone.lead_name ? (
+                  <div className="lead-name-container">
+                    <span className="lead-name">{phone.lead_name}</span>
+                    <span className="phone-number">{formatPhoneNumber(phone._id)}</span>
+                  </div>
+                ) : (
+                  formatPhoneNumber(phone._id)
+                )}
+              </div>
               <div className="chat-last-message">
                 Última mensagem: {phone.last_message || 'Nenhuma mensagem'}
               </div>

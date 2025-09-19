@@ -4,6 +4,7 @@ export interface Phone {
   _createTime: string;
   _updateTime: string;
   last_message: string;
+  lead_name?: string;
 }
 
 export interface Message {
@@ -12,7 +13,7 @@ export interface Message {
   _createTime: string;
   _updateTime: string;
   chat_phone: string;
-  source: 'Contact' | 'Member';
+  source: 'Contact' | 'Member' | 'Bot';
   content: string;
 }
 
@@ -40,4 +41,10 @@ export interface AuthContextType {
   login: (credentials: LoginCredentials) => Promise<boolean>;
   logout: () => void;
   isAuthenticated: boolean;
+}
+
+export interface ApiConfig {
+  sendMessageUrl: string;
+  baseUrl?: string;
+  apiKey?: string;
 }

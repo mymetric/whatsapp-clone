@@ -1,8 +1,4 @@
-import { User, LoginCredentials } from '../types';
-
-interface ApiConfig {
-  sendMessageUrl: string;
-}
+import { User, LoginCredentials, ApiConfig } from '../types';
 
 interface CredentialsData {
   users: User[];
@@ -28,15 +24,15 @@ class AuthService {
       // Fallback para desenvolvimento
       this.users = [
         {
-          email: "accounts@mymetric.com.br",
-          password: "hdaqzrf7rcK/ZLcoNDKhKiCbQKYSDkQqF+iuAfygro=",
-          name: "MyMetric Accounts",
+          email: "admin@exemplo.com",
+          password: "senha-exemplo-criptografada",
+          name: "Administrador",
           role: "admin"
         },
         {
-          email: "marketing@rosenbaum.adv.br",
-          password: "wMe1lbDXeoFZzzeQTB2JwkQ53F4u8tsy9CLWx0v7vR4=",
-          name: "Rosenbaum Marketing",
+          email: "usuario@exemplo.com",
+          password: "outra-senha-exemplo",
+          name: "Usuário",
           role: "user"
         }
       ];

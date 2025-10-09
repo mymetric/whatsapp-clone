@@ -93,7 +93,8 @@ export const phoneService = {
         _createTime: item.document.createTime,
         _updateTime: item.document.updateTime,
         last_message: item.document.fields.last_message.integerValue,
-        lead_name: item.document.fields.lead_name?.stringValue || undefined
+        lead_name: item.document.fields.lead_name?.stringValue || undefined,
+        email: item.document.fields.email?.stringValue || undefined
       }));
       
       console.log('Dados transformados:', phones);
@@ -130,6 +131,88 @@ export const messageService = {
     } catch (error) {
       console.error('Erro na requisição de mensagens:', error);
       throw error;
+    }
+  }
+};
+
+export const emailService = {
+  async getEmailByEmail(email: string): Promise<any> {
+    try {
+      console.log('🔍 Buscando email por email:', email);
+      console.log('📡 URL da requisição:', `https://n8n.rosenbaum.adv.br/webhook/api/emails?email=${encodeURIComponent(email)}`);
+      const response = await axios.get(`https://n8n.rosenbaum.adv.br/webhook/api/emails?email=${encodeURIComponent(email)}`, {
+        headers: {
+          'apikey': 'YY2pHUzcGUFKBmZ'
+        }
+      });
+      console.log('✅ Resposta da API de email:', response.data);
+      // A API retorna um objeto com destination e sender
+      const data = response.data as any;
+      if (data && data.destination && Array.isArray(data.destination) && data.destination.length > 0) {
+        console.log('📧 Emails encontrados:', data.destination.length);
+        return data; // Retorna a resposta completa da API
+      }
+      return undefined;
+    } catch (error) {
+      console.error('❌ Erro ao buscar email:', error);
+      // Retorna undefined em caso de erro para não quebrar a aplicação
+      return undefined;
+    }
+  },
+
+  async getEmailByPhone(phone: string): Promise<any> {
+    try {
+      console.log('🔍 Buscando email por telefone:', phone);
+      console.log('📡 URL da requisição:', `https://n8n.rosenbaum.adv.br/webhook/api/emails?phone=${encodeURIComponent(phone)}`);
+      const response = await axios.get(`https://n8n.rosenbaum.adv.br/webhook/api/emails?phone=${encodeURIComponent(phone)}`, {
+        headers: {
+          'apikey': 'YY2pHUzcGUFKBmZ'
+        }
+      });
+      console.log('✅ Resposta da API de email por telefone:', response.data);
+      // A API retorna um objeto com destination e sender
+      const data = response.data as any;
+      if (data && data.destination && Array.isArray(data.destination) && data.destination.length > 0) {
+        const email = data.destination[0].destination;
+        console.log('📧 Email encontrado por telefone:', email);
+        return email; // Retorna apenas o email
+      }
+      return undefined;
+    } catch (error) {
+      console.error('❌ Erro ao buscar email por telefone:', error);
+      return undefined;
+    }
+  },
+
+  async getEmailForContact(phone: Phone): Promise<string | undefined> {
+    try {
+      console.log('📞 Iniciando busca de email para contato:', {
+        id: phone._id,
+        name: phone.lead_name,
+        existingEmail: phone.email
+      });
+
+      // Se já tem email nos dados, buscar emails trocados
+      if (phone.email) {
+        console.log('📧 Email encontrado, buscando emails trocados:', phone.email);
+        try {
+          const emailData = await this.getEmailByEmail(phone.email);
+          if (emailData) {
+            console.log('✅ Emails trocados encontrados:', emailData);
+            // Retorna a resposta completa da API (com destination e sender)
+            return emailData;
+          }
+        } catch (error) {
+          console.error('❌ Erro ao buscar emails trocados:', error);
+        }
+        return phone.email; // Fallback para email original
+      }
+
+      console.log('❌ Nenhum email encontrado para o contato');
+      return undefined;
+    } catch (error) {
+      console.error('❌ Erro ao buscar email para contato:', error);
+      return undefined;
     }
   }
 };

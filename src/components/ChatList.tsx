@@ -1,6 +1,5 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Phone } from '../types';
-import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import './ChatList.css';
 
 interface ChatListProps {
@@ -8,9 +7,20 @@ interface ChatListProps {
   selectedPhone: string | null;
   onSelectPhone: (phone: Phone) => void;
   loading: boolean;
+  isRefreshing?: boolean;
+  lastUpdate?: Date | null;
+  onManualRefresh?: () => void;
 }
 
-const ChatList: React.FC<ChatListProps> = ({ phones, selectedPhone, onSelectPhone, loading }) => {
+const ChatList: React.FC<ChatListProps> = ({ 
+  phones, 
+  selectedPhone, 
+  onSelectPhone, 
+  loading, 
+  isRefreshing = false, 
+  lastUpdate, 
+  onManualRefresh 
+}) => {
   const [searchTerm, setSearchTerm] = useState('');
 
   const formatPhoneNumber = (phone: string) => {
@@ -30,10 +40,12 @@ const ChatList: React.FC<ChatListProps> = ({ phones, selectedPhone, onSelectPhon
       const phoneNumber = phone._id || '';
       const lastMessage = phone.last_message || '';
       const leadName = phone.lead_name || '';
+      const email = phone.email || '';
       
       return phoneNumber.toLowerCase().includes(searchLower) ||
              lastMessage.toLowerCase().includes(searchLower) ||
-             leadName.toLowerCase().includes(searchLower);
+             leadName.toLowerCase().includes(searchLower) ||
+             email.toLowerCase().includes(searchLower);
     });
   }, [phones, searchTerm]);
 
@@ -52,6 +64,21 @@ const ChatList: React.FC<ChatListProps> = ({ phones, selectedPhone, onSelectPhon
     }
   };
 
+  const formatLastUpdate = (date: Date | null) => {
+    if (!date) return '';
+    const now = new Date();
+    const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+    
+    if (diffInSeconds < 60) {
+      return 'Atualizado agora';
+    } else if (diffInSeconds < 3600) {
+      const minutes = Math.floor(diffInSeconds / 60);
+      return `Atualizado há ${minutes} min`;
+    } else {
+      return `Atualizado às ${date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
+    }
+  };
+
   if (loading) {
     return (
       <div className="chat-list">
@@ -66,7 +93,23 @@ const ChatList: React.FC<ChatListProps> = ({ phones, selectedPhone, onSelectPhon
   return (
     <div className="chat-list">
       <div className="chat-list-header">
-        <h2>Conversas</h2>
+        <div className="header-top">
+          <h2>Conversas</h2>
+          <button 
+            className={`refresh-button ${isRefreshing ? 'refreshing' : ''}`}
+            onClick={onManualRefresh}
+            disabled={isRefreshing}
+            title="Atualizar lista de conversas"
+          >
+            {isRefreshing ? '⟳' : '↻'}
+          </button>
+        </div>
+        {lastUpdate && (
+          <div className="last-update">
+            {formatLastUpdate(lastUpdate)}
+            {isRefreshing && <span className="auto-refresh-indicator"> • Atualizando...</span>}
+          </div>
+        )}
         <div className="search-container">
           <input
             type="text"
@@ -98,7 +141,10 @@ const ChatList: React.FC<ChatListProps> = ({ phones, selectedPhone, onSelectPhon
               <div className="chat-name">
                 {phone.lead_name ? (
                   <div className="lead-name-container">
-                    <span className="lead-name">{phone.lead_name}</span>
+                    <div className="name-email-container">
+                      <span className="lead-name">{phone.lead_name}</span>
+                      {phone.email && <span className="client-email">{phone.email}</span>}
+                    </div>
                     <span className="phone-number">{formatPhoneNumber(phone._id)}</span>
                   </div>
                 ) : (

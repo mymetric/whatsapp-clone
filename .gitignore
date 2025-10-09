@@ -25,5 +25,6 @@ yarn-error.log*
 # Credentials
 credentials.json
 
-# Deploy script (keep local only)
+# Deploy scripts (keep local only)
 deploy.sh
+deploy.sh.example

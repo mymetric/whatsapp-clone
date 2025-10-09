@@ -5,6 +5,7 @@ export interface Phone {
   _updateTime: string;
   last_message: string;
   lead_name?: string;
+  email?: string;
 }
 
 export interface Message {
@@ -15,6 +16,8 @@ export interface Message {
   chat_phone: string;
   source: 'Contact' | 'Member' | 'Bot';
   content: string;
+  image?: string;
+  audio?: boolean;
 }
 
 export interface Chat {

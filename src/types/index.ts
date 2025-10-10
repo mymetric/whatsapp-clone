@@ -6,6 +6,9 @@ export interface Phone {
   last_message: string;
   lead_name?: string;
   email?: string;
+  etiqueta?: string;
+  status?: string;
+  board?: string;
 }
 
 export interface Message {

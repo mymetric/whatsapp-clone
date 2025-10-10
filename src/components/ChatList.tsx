@@ -22,6 +22,18 @@ const ChatList: React.FC<ChatListProps> = ({
   onManualRefresh 
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
+  const [filterBoard, setFilterBoard] = useState('');
+  const [filterEtiqueta, setFilterEtiqueta] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
+
+  const hasActiveFilters = searchTerm || filterBoard || filterEtiqueta || filterStatus;
+
+  const clearAllFilters = () => {
+    setSearchTerm('');
+    setFilterBoard('');
+    setFilterEtiqueta('');
+    setFilterStatus('');
+  };
 
   const formatPhoneNumber = (phone: string) => {
     // Remove o + e formata o número
@@ -30,24 +42,43 @@ const ChatList: React.FC<ChatListProps> = ({
     return `+${cleanPhone.slice(0, 2)} ${cleanPhone.slice(2, 4)} ${cleanPhone.slice(4, 9)}-${cleanPhone.slice(9)}`;
   };
 
+  // Obter valores únicos para os dropdowns
+  const uniqueBoards = useMemo(() => {
+    const boards = phones.map(p => p.board).filter(Boolean) as string[];
+    return Array.from(new Set(boards)).sort();
+  }, [phones]);
+
+  const uniqueEtiquetas = useMemo(() => {
+    const etiquetas = phones.map(p => p.etiqueta).filter(Boolean) as string[];
+    return Array.from(new Set(etiquetas)).sort();
+  }, [phones]);
+
+  const uniqueStatus = useMemo(() => {
+    const statuses = phones.map(p => p.status).filter(Boolean) as string[];
+    return Array.from(new Set(statuses)).sort();
+  }, [phones]);
+
   const filteredPhones = useMemo(() => {
-    if (!searchTerm.trim()) {
-      return phones;
-    }
-    
-    const searchLower = searchTerm.toLowerCase();
     return phones.filter(phone => {
-      const phoneNumber = phone._id || '';
-      const lastMessage = phone.last_message || '';
-      const leadName = phone.lead_name || '';
-      const email = phone.email || '';
-      
-      return phoneNumber.toLowerCase().includes(searchLower) ||
-             lastMessage.toLowerCase().includes(searchLower) ||
-             leadName.toLowerCase().includes(searchLower) ||
-             email.toLowerCase().includes(searchLower);
+      // Filtro de texto
+      const searchLower = searchTerm.toLowerCase();
+      const matchesSearch = !searchTerm.trim() || (
+        (phone._id || '').toLowerCase().includes(searchLower) ||
+        (phone.lead_name || '').toLowerCase().includes(searchLower) ||
+        (phone.email || '').toLowerCase().includes(searchLower) ||
+        (phone.etiqueta || '').toLowerCase().includes(searchLower) ||
+        (phone.status || '').toLowerCase().includes(searchLower) ||
+        (phone.board || '').toLowerCase().includes(searchLower)
+      );
+
+      // Filtros de dropdown
+      const matchesBoard = !filterBoard || phone.board === filterBoard;
+      const matchesEtiqueta = !filterEtiqueta || phone.etiqueta === filterEtiqueta;
+      const matchesStatus = !filterStatus || phone.status === filterStatus;
+
+      return matchesSearch && matchesBoard && matchesEtiqueta && matchesStatus;
     });
-  }, [phones, searchTerm]);
+  }, [phones, searchTerm, filterBoard, filterEtiqueta, filterStatus]);
 
   const formatTime = (timestamp: string) => {
     if (!timestamp) return 'Data não disponível';
@@ -113,17 +144,60 @@ const ChatList: React.FC<ChatListProps> = ({
         <div className="search-container">
           <input
             type="text"
-            placeholder="Buscar por nome, telefone ou mensagem..."
+            placeholder="Buscar por nome, telefone, email..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="search-input"
           />
         </div>
+        <div className="filters-row">
+          {hasActiveFilters && (
+            <button
+              onClick={clearAllFilters}
+              className="clear-filters-button"
+              title="Limpar todos os filtros"
+            >
+              ✕
+            </button>
+          )}
+          <div className="filters-container">
+            <select
+              value={filterBoard}
+              onChange={(e) => setFilterBoard(e.target.value)}
+              className="filter-select"
+            >
+              <option value="">📋 Board</option>
+              {uniqueBoards.map(board => (
+                <option key={board} value={board}>{board}</option>
+              ))}
+            </select>
+            <select
+              value={filterEtiqueta}
+              onChange={(e) => setFilterEtiqueta(e.target.value)}
+              className="filter-select"
+            >
+              <option value="">🏷️ Etiqueta</option>
+              {uniqueEtiquetas.map(etiqueta => (
+                <option key={etiqueta} value={etiqueta}>{etiqueta}</option>
+              ))}
+            </select>
+            <select
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+              className="filter-select"
+            >
+              <option value="">📊 Status</option>
+              {uniqueStatus.map(status => (
+                <option key={status} value={status}>{status}</option>
+              ))}
+            </select>
+          </div>
+        </div>
       </div>
       <div className="chat-items">
-        {filteredPhones.length === 0 && searchTerm ? (
+        {filteredPhones.length === 0 && (searchTerm || filterBoard || filterEtiqueta || filterStatus) ? (
           <div className="no-results">
-            <p>Nenhuma conversa encontrada para "{searchTerm}"</p>
+            <p>Nenhuma conversa encontrada com os filtros aplicados</p>
           </div>
         ) : (
           filteredPhones.map((phone) => (
@@ -132,11 +206,6 @@ const ChatList: React.FC<ChatListProps> = ({
             className={`chat-item ${selectedPhone === phone._id ? 'selected' : ''}`}
             onClick={() => onSelectPhone(phone)}
           >
-            <div className="chat-avatar">
-              <div className="avatar-circle">
-                {phone._id ? phone._id.slice(-2).toUpperCase() : 'NA'}
-              </div>
-            </div>
             <div className="chat-info">
               <div className="chat-name">
                 {phone.lead_name ? (
@@ -148,15 +217,39 @@ const ChatList: React.FC<ChatListProps> = ({
                     <span className="phone-number">{formatPhoneNumber(phone._id)}</span>
                   </div>
                 ) : (
-                  formatPhoneNumber(phone._id)
+                  <div className="lead-name-container">
+                    <span className="phone-number">{formatPhoneNumber(phone._id)}</span>
+                    <span className="monday-not-found">⚠️ Telefone não encontrado no Monday</span>
+                  </div>
                 )}
               </div>
-              <div className="chat-last-message">
-                Última mensagem: {phone.last_message || 'Nenhuma mensagem'}
+              <div className="chat-metadata">
+                {phone.etiqueta && (
+                  <span className="metadata-tag etiqueta">
+                    🏷️ {phone.etiqueta}
+                  </span>
+                )}
+                {phone.status && (
+                  <span className="metadata-tag status">
+                    📊 {phone.status}
+                  </span>
+                )}
+                {phone.board && (
+                  <span className="metadata-tag board">
+                    📋 {phone.board}
+                  </span>
+                )}
               </div>
             </div>
-            <div className="chat-time">
-              {formatTime(phone._updateTime)}
+            <div className="chat-metadata-right">
+              <div className="chat-time">
+                {formatTime(phone._updateTime)}
+              </div>
+              {phone.last_message && (
+                <div className="message-count">
+                  {phone.last_message}
+                </div>
+              )}
             </div>
           </div>
           ))

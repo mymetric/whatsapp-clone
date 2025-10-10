@@ -94,7 +94,10 @@ export const phoneService = {
         _updateTime: item.document.updateTime,
         last_message: item.document.fields.last_message.integerValue,
         lead_name: item.document.fields.lead_name?.stringValue || undefined,
-        email: item.document.fields.email?.stringValue || undefined
+        email: item.document.fields.email?.stringValue || undefined,
+        etiqueta: item.document.fields.etiqueta?.stringValue || undefined,
+        status: item.document.fields.status?.stringValue || undefined,
+        board: item.document.fields.board?.stringValue || undefined
       }));
       
       console.log('Dados transformados:', phones);

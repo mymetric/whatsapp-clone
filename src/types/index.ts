@@ -9,6 +9,8 @@ export interface Phone {
   etiqueta?: string;
   status?: string;
   board?: string;
+  pulse_id?: string;
+  board_id?: string;
 }
 
 export interface Message {
@@ -20,7 +22,27 @@ export interface Message {
   source: 'Contact' | 'Member' | 'Bot';
   content: string;
   image?: string;
-  audio?: boolean;
+  audio?: boolean | string;
+}
+
+export interface DocumentImage {
+  fileId: string;
+  url: string;
+  extractedText?: string;
+  raw?: any;
+}
+
+export interface DocumentRecord {
+  id: string;
+  name?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  text?: string;
+  origin: 'email' | 'phone';
+  direction?: 'sent' | 'received';
+  images: DocumentImage[];
+  metadata?: Record<string, any>;
+  raw?: any;
 }
 
 export interface Chat {

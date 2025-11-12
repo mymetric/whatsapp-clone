@@ -296,6 +296,32 @@
   border: 1px solid #0984e3;
 }
 
+.monday-link {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 8px;
+  font-weight: 400;
+  line-height: 1.2;
+  white-space: nowrap;
+  text-decoration: none;
+  background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%);
+  color: white;
+  border: 1px solid #ee5a52;
+  transition: all 0.2s ease;
+  opacity: 1;
+  margin-left: 4px;
+}
+
+.monday-link:hover {
+  background: linear-gradient(135deg, #e9ecef 0%, #dee2e6 100%);
+  color: #495057;
+  opacity: 1;
+  transform: scale(1.02);
+  text-decoration: none;
+}
+
 .chat-last-message {
   color: #6c757d;
   font-size: 14px;

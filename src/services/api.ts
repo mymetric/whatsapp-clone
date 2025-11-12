@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { Phone, Message } from '../types';
+import { Phone, Message, DocumentRecord, DocumentImage } from '../types';
 
 interface ApiConfig {
   baseUrl: string;
@@ -80,6 +80,12 @@ export const phoneService = {
       console.log('É array?', Array.isArray(response.data));
       console.log('Resposta da API (data):', response.data);
       
+      // Debug: Verificar estrutura dos dados
+      if (Array.isArray(response.data) && response.data.length > 0) {
+        console.log('Primeiro item da API:', response.data[0]);
+        console.log('Campos disponíveis no primeiro item:', response.data[0]?.document?.fields);
+      }
+      
       // Verificar se response.data é um array
       if (!Array.isArray(response.data)) {
         console.error('Erro: response.data não é um array:', response.data);
@@ -87,18 +93,33 @@ export const phoneService = {
       }
       
       // Transformar os dados da API no formato esperado pela aplicação
-      const phones: Phone[] = response.data.map((item) => ({
-        _name: item.document.name,
-        _id: item.document.id,
-        _createTime: item.document.createTime,
-        _updateTime: item.document.updateTime,
-        last_message: item.document.fields.last_message.integerValue,
-        lead_name: item.document.fields.lead_name?.stringValue || undefined,
-        email: item.document.fields.email?.stringValue || undefined,
-        etiqueta: item.document.fields.etiqueta?.stringValue || undefined,
-        status: item.document.fields.status?.stringValue || undefined,
-        board: item.document.fields.board?.stringValue || undefined
-      }));
+      const phones: Phone[] = response.data.map((item) => {
+        const phone = {
+          _name: item.document.name,
+          _id: item.document.id,
+          _createTime: item.document.createTime,
+          _updateTime: item.document.updateTime,
+          last_message: item.document.fields.last_message.integerValue,
+          lead_name: item.document.fields.lead_name?.stringValue || undefined,
+          email: item.document.fields.email?.stringValue || undefined,
+          etiqueta: item.document.fields.etiqueta?.stringValue || undefined,
+          status: item.document.fields.status?.stringValue || undefined,
+          board: item.document.fields.board?.stringValue || undefined,
+          pulse_id: item.document.fields.pulse_id?.stringValue || undefined,
+          board_id: item.document.fields.board_id?.stringValue || undefined
+        };
+        
+        // Debug: Log específico para Monday.com
+        if (phone.pulse_id || phone.board_id) {
+          console.log(`Phone ${phone._id} tem dados do Monday:`, {
+            pulse_id: phone.pulse_id,
+            board_id: phone.board_id,
+            lead_name: phone.lead_name
+          });
+        }
+        
+        return phone;
+      });
       
       console.log('Dados transformados:', phones);
       return phones;
@@ -234,5 +255,217 @@ export const aiSuggestionService = {
       console.error('Erro na requisição de sugestão de IA:', error);
       return null;
     }
+  }
+};
+
+const DOCUMENTS_BASE_URL = 'https://n8n.rosenbaum.adv.br/webhook/api/documents';
+const EXTERNAL_API_HEADERS = {
+  apikey: 'YY2pHUzcGUFKBmZ'
+};
+
+const buildDriveUrl = (fileId: string) => {
+  if (!fileId) return '';
+  if (fileId.startsWith('http')) return fileId;
+  return `https://drive.google.com/uc?export=download&id=${fileId}`;
+};
+
+const parseImagesFromField = (field: any): DocumentImage[] => {
+  if (!field) return [];
+
+  const normalizeArray = (value: any): any[] => {
+    if (!value) return [];
+    if (Array.isArray(value)) return value;
+    if (typeof value === 'object') return [value];
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (!trimmed) return [];
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) return parsed;
+        if (parsed && typeof parsed === 'object') return [parsed];
+      } catch {
+        return [{ file: trimmed }];
+      }
+    }
+    return [];
+  };
+
+  const items = normalizeArray(field);
+
+  return items
+    .map((item, index) => {
+      if (!item) return null;
+      const fileId = item.file || item.fileId || item.id || item.url || item.link;
+      if (!fileId) return null;
+      return {
+        fileId: String(fileId),
+        url: buildDriveUrl(String(fileId)),
+        extractedText: typeof item.extracted_text === 'string' ? item.extracted_text : undefined,
+        raw: item
+      } as DocumentImage;
+    })
+    .filter((image): image is DocumentImage => Boolean(image));
+};
+
+const normalizeDocumentRecord = (
+  doc: any,
+  origin: 'email' | 'phone',
+  direction?: 'sent' | 'received'
+): DocumentRecord | null => {
+  if (!doc || typeof doc !== 'object' || Object.keys(doc).length === 0) {
+    return null;
+  }
+
+  const audioValue = doc.audio;
+  if (
+    audioValue === true ||
+    (typeof audioValue === 'string' && audioValue.toLowerCase() === 'true')
+  ) {
+    return null;
+  }
+
+  const images: DocumentImage[] = [
+    ...parseImagesFromField(doc.images),
+    ...parseImagesFromField(doc.image),
+    ...parseImagesFromField(doc.files)
+  ];
+
+  const metadata: Record<string, any> = {};
+
+  ['sender', 'destination', 'subject', 'email', 'phone'].forEach((key) => {
+    if (doc[key] !== undefined) {
+      metadata[key] = doc[key];
+    }
+  });
+
+  const id =
+    doc._id ||
+    doc._name ||
+    doc.id ||
+    doc.name ||
+    `${origin}-${direction ?? 'document'}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+  return {
+    id: String(id),
+    name: doc.name || doc.subject || doc._name,
+    createdAt: doc._createTime || doc.createTime || doc.createdAt,
+    updatedAt: doc._updateTime || doc.updateTime || doc.updatedAt,
+    text: typeof doc.text === 'string' ? doc.text : doc.content,
+    origin,
+    direction,
+    images,
+    metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+    raw: doc
+  };
+};
+
+const sanitizePhone = (phone: string) => {
+  if (!phone) return phone;
+  return phone.startsWith('+') ? phone : `+${phone}`;
+};
+
+export const documentService = {
+  async getDocumentsByEmail(email: string): Promise<DocumentRecord[]> {
+    if (!email) return [];
+
+    try {
+      const response = await axios.get(`${DOCUMENTS_BASE_URL}/email`, {
+        params: { email },
+        headers: EXTERNAL_API_HEADERS
+      });
+
+      const payload = response.data;
+      if (!Array.isArray(payload)) {
+        return [];
+      }
+
+      const documents: DocumentRecord[] = [];
+
+      payload.forEach((item: any) => {
+        if (!item || typeof item !== 'object') return;
+
+        const processField = (field: any, direction: 'sent' | 'received') => {
+          if (!field) return;
+          if (Array.isArray(field)) {
+            field.forEach((docItem) => {
+              const normalized = normalizeDocumentRecord(docItem, 'email', direction);
+              if (normalized) documents.push(normalized);
+            });
+          } else {
+            const normalized = normalizeDocumentRecord(field, 'email', direction);
+            if (normalized) documents.push(normalized);
+          }
+        };
+
+        processField(item.sent, 'sent');
+        processField(item.received, 'received');
+      });
+
+      return documents;
+    } catch (error) {
+      console.error('❌ Erro ao buscar documentos por email:', error);
+      throw error;
+    }
+  },
+
+  async getDocumentsByPhone(phone: string): Promise<DocumentRecord[]> {
+    if (!phone) return [];
+
+    const normalizedPhone = sanitizePhone(phone);
+
+    try {
+      const response = await axios.get(`${DOCUMENTS_BASE_URL}/phone`, {
+        params: { phone: normalizedPhone },
+        headers: EXTERNAL_API_HEADERS
+      });
+
+      const payload = response.data;
+      if (!Array.isArray(payload)) {
+        return [];
+      }
+
+      return payload
+        .map((item: any) => normalizeDocumentRecord(item, 'phone'))
+        .filter((doc): doc is DocumentRecord => Boolean(doc));
+    } catch (error) {
+      console.error('❌ Erro ao buscar documentos por telefone:', error);
+      throw error;
+    }
+  },
+
+  async getDocumentsForContact(phone: Phone): Promise<DocumentRecord[]> {
+    if (!phone) return [];
+
+    const tasks: Promise<DocumentRecord[]>[] = [];
+
+    if (phone.email) {
+      tasks.push(
+        this.getDocumentsByEmail(phone.email).catch((error) => {
+          console.error('❌ Falha ao carregar documentos via email:', error);
+          return [];
+        })
+      );
+    }
+
+    tasks.push(
+      this.getDocumentsByPhone(phone._id).catch((error) => {
+        console.error('❌ Falha ao carregar documentos via telefone:', error);
+        return [];
+      })
+    );
+
+    const results = await Promise.all(tasks);
+    const merged = results.flat();
+
+    const uniqueMap = new Map<string, DocumentRecord>();
+
+    merged.forEach((doc) => {
+      const key = `${doc.origin}-${doc.id}`;
+      if (!uniqueMap.has(key)) {
+        uniqueMap.set(key, doc);
+      }
+    });
+
+    return Array.from(uniqueMap.values());
   }
 };

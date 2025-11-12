@@ -5,6 +5,7 @@ import { messageService } from '../services/messageService';
 import { grokService } from '../services/grokService';
 import MondayTab from './MondayTab';
 import EmailTab from './EmailTab';
+import DocumentsTab from './DocumentsTab';
 import './ChatWindow.css';
 
 interface ChatWindowProps {
@@ -29,7 +30,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone }) => {
   const [showSuggestion, setShowSuggestion] = useState(false);
   const [showFullSuggestion, setShowFullSuggestion] = useState(false);
   const [showInput, setShowInput] = useState(false);
-  const [activeTab, setActiveTab] = useState<'chat' | 'emails' | 'monday'>('chat');
+  const [activeTab, setActiveTab] = useState<'chat' | 'emails' | 'documents' | 'monday'>('chat');
   const [showGrokModal, setShowGrokModal] = useState(false);
   const [grokPrompt, setGrokPrompt] = useState('');
   const [grokLoading, setGrokLoading] = useState(false);
@@ -667,6 +668,17 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone }) => {
             <span>Emails</span>
           </button>
           <button
+            className={`tab-button ${activeTab === 'documents' ? 'active' : ''}`}
+            onClick={() => setActiveTab('documents')}
+            title="Documentos do lead"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M6 2C4.9 2 4 2.9 4 4V20C4 21.1 4.9 22 6 22H18C19.1 22 20 21.1 20 20V8L14 2H6ZM13 9V3.5L18.5 9H13Z" />
+              <path d="M8 12H16V14H8V12ZM8 16H14V18H8V16Z" />
+            </svg>
+            <span>Documentos</span>
+          </button>
+          <button
             className={`tab-button ${activeTab === 'monday' ? 'active' : ''}`}
             onClick={() => setActiveTab('monday')}
             title="Dados do Monday.com"
@@ -704,6 +716,11 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone }) => {
                 const isSending = message._id.startsWith('temp_');
                 const previousMessage = index > 0 ? messages[index - 1] : null;
                 const showDateSeparator = shouldShowDateSeparator(message, previousMessage);
+                const audioValue = message.audio;
+                const isAudio =
+                  audioValue === true ||
+                  (typeof audioValue === 'string' && audioValue.toLowerCase() === 'true');
+                const shouldShowTextContent = Boolean(message.content) && !isAudio;
                 
                 return (
                   <React.Fragment key={message._id}>
@@ -724,15 +741,15 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone }) => {
                       } ${isSending ? 'sending' : ''}`}
                     >
                       <div className="message-content">
-                        {message.source === 'Bot' && !message.image && !message.audio && (
+                        {message.source === 'Bot' && !message.image && !isAudio && (
                           <div className="bot-indicator">
                             <span className="bot-icon">⚙️</span>
                             <span className="bot-label">Sistema</span>
                           </div>
                         )}
-                        {(message.image || message.audio) && (
+                        {(message.image || isAudio) && (
                           <div className="message-media">
-                            {message.audio ? (
+                            {isAudio ? (
                               <div className="message-audio-indicator">
                                 <div className="audio-icon-container">
                                   <svg className="audio-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -770,7 +787,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone }) => {
                             )}
                           </div>
                         )}
-                        {message.content && (
+                        {shouldShowTextContent && (
                           <div className="message-text">{message.content}</div>
                         )}
                         <div className="message-time">
@@ -791,6 +808,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone }) => {
         </div>
       ) : activeTab === 'emails' ? (
         <EmailTab selectedPhone={selectedPhone} />
+      ) : activeTab === 'documents' ? (
+        <DocumentsTab selectedPhone={selectedPhone} />
       ) : (
         <MondayTab phone={selectedPhone._id} />
       )}

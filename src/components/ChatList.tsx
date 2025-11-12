@@ -26,6 +26,10 @@ const ChatList: React.FC<ChatListProps> = ({
   const [filterEtiqueta, setFilterEtiqueta] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
 
+  // Debug: Log dos dados recebidos
+  console.log('ChatList - phones recebidos:', phones);
+  console.log('ChatList - phones com pulse_id/board_id:', phones?.filter(p => p.pulse_id && p.board_id));
+
   const hasActiveFilters = searchTerm || filterBoard || filterEtiqueta || filterStatus;
 
   const clearAllFilters = () => {
@@ -200,12 +204,17 @@ const ChatList: React.FC<ChatListProps> = ({
             <p>Nenhuma conversa encontrada com os filtros aplicados</p>
           </div>
         ) : (
-          filteredPhones.map((phone) => (
-          <div
-            key={phone._id || 'unknown'}
-            className={`chat-item ${selectedPhone === phone._id ? 'selected' : ''}`}
-            onClick={() => onSelectPhone(phone)}
-          >
+          filteredPhones.map((phone) => {
+            // Debug: Verificar se o phone tem pulse_id e board_id
+            const hasMondayData = phone.pulse_id && phone.board_id;
+            console.log(`Phone ${phone._id}: pulse_id=${phone.pulse_id}, board_id=${phone.board_id}, hasMondayData=${hasMondayData}`);
+            
+            return (
+            <div
+              key={phone._id || 'unknown'}
+              className={`chat-item ${selectedPhone === phone._id ? 'selected' : ''}`}
+              onClick={() => onSelectPhone(phone)}
+            >
             <div className="chat-info">
               <div className="chat-name">
                 {phone.lead_name ? (
@@ -239,6 +248,36 @@ const ChatList: React.FC<ChatListProps> = ({
                     📋 {phone.board}
                   </span>
                 )}
+                {/* Link de teste temporário - sempre visível */}
+                <a 
+                  href="https://rosenbaum-adv.monday.com/boards/632454515/pulses/10001094405"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="monday-link"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    console.log('Monday link de teste clicado');
+                  }}
+                  title="Abrir no Monday.com (teste)"
+                >
+                  📋 Monday
+                </a>
+                
+                {phone.pulse_id && phone.board_id && (
+                  <a 
+                    href={`https://rosenbaum-adv.monday.com/boards/${phone.board_id}/pulses/${phone.pulse_id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="monday-link"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      console.log('Monday link clicado:', phone.pulse_id, phone.board_id);
+                    }}
+                    title="Abrir no Monday.com"
+                  >
+                    📋 Monday
+                  </a>
+                )}
               </div>
             </div>
             <div className="chat-metadata-right">
@@ -252,7 +291,8 @@ const ChatList: React.FC<ChatListProps> = ({
               )}
             </div>
           </div>
-          ))
+          );
+          })
         )}
       </div>
     </div>

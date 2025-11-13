@@ -720,7 +720,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone }) => {
                 const isAudio =
                   audioValue === true ||
                   (typeof audioValue === 'string' && audioValue.toLowerCase() === 'true');
-                const shouldShowTextContent = Boolean(message.content) && !isAudio;
+                const shouldShowTextContent = Boolean(message.content);
                 
                 return (
                   <React.Fragment key={message._id}>
@@ -788,7 +788,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone }) => {
                           </div>
                         )}
                         {shouldShowTextContent && (
-                          <div className="message-text">{message.content}</div>
+                          <div className={`message-text ${isAudio ? 'audio-transcription' : ''}`}>
+                            {message.content}
+                          </div>
                         )}
                         <div className="message-time">
                           {isSending ? (

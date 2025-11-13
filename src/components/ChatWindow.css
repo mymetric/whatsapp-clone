@@ -301,6 +301,16 @@
   max-width: 100%;
 }
 
+.message-text.audio-transcription {
+  font-size: 14px;
+  opacity: 0.9;
+  border-radius: 8px;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.05);
+  margin-top: 6px;
+  white-space: pre-wrap;
+}
+
 /* Estilos para mídia nas mensagens */
 .message-media {
   margin-bottom: 8px;

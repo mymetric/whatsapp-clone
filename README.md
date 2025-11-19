@@ -1,18 +1,54 @@
-# Getting Started with Create React App
+# WhatsApp Clone
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+Clone do WhatsApp desenvolvido com React e TypeScript.
 
-## Available Scripts
+## 🚀 Como Executar
 
-In the project directory, you can run:
+### Primeira vez (instalação inicial)
+
+```bash
+# 1. Instalar dependências
+npm install
+
+# 2. Iniciar o servidor de desenvolvimento
+npm start
+```
+
+### Uso diário (quando já tem as dependências instaladas)
+
+```bash
+# Apenas iniciar o servidor
+npm start
+```
+
+O app estará disponível em [http://localhost:3000](http://localhost:3000)
+
+### ⚠️ Se der problema (limpeza e reinstalação)
+
+Se o `npm install` estiver lento ou der erro, execute:
+
+```bash
+# 1. Limpar cache do npm
+npm cache clean --force
+
+# 2. Remover node_modules e package-lock.json
+rm -rf node_modules package-lock.json
+
+# 3. Reinstalar tudo do zero
+npm install
+
+# 4. Iniciar o servidor
+npm start
+```
+
+## 📋 Comandos Disponíveis
 
 ### `npm start`
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
+Inicia o servidor de desenvolvimento.\
+Abra [http://localhost:3000](http://localhost:3000) no navegador.
 
-The page will reload if you make edits.\
-You will also see any lint errors in the console.
+A página recarrega automaticamente quando você faz alterações no código.
 
 ### `npm test`
 

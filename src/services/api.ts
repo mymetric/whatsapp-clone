@@ -94,19 +94,28 @@ export const phoneService = {
       
       // Transformar os dados da API no formato esperado pela aplicação
       const phones: Phone[] = response.data.map((item) => {
+        // Função auxiliar para extrair valor de campo (pode ser stringValue, integerValue, etc)
+        const getFieldValue = (field: any): string | undefined => {
+          if (!field) return undefined;
+          if (field.stringValue !== undefined) return String(field.stringValue);
+          if (field.integerValue !== undefined) return String(field.integerValue);
+          if (field.doubleValue !== undefined) return String(field.doubleValue);
+          return undefined;
+        };
+        
         const phone = {
           _name: item.document.name,
           _id: item.document.id,
           _createTime: item.document.createTime,
           _updateTime: item.document.updateTime,
-          last_message: item.document.fields.last_message.integerValue,
-          lead_name: item.document.fields.lead_name?.stringValue || undefined,
-          email: item.document.fields.email?.stringValue || undefined,
-          etiqueta: item.document.fields.etiqueta?.stringValue || undefined,
-          status: item.document.fields.status?.stringValue || undefined,
-          board: item.document.fields.board?.stringValue || undefined,
-          pulse_id: item.document.fields.pulse_id?.stringValue || undefined,
-          board_id: item.document.fields.board_id?.stringValue || undefined
+          last_message: item.document.fields.last_message?.integerValue || '',
+          lead_name: getFieldValue(item.document.fields.lead_name),
+          email: getFieldValue(item.document.fields.email),
+          etiqueta: getFieldValue(item.document.fields.etiqueta),
+          status: getFieldValue(item.document.fields.status),
+          board: getFieldValue(item.document.fields.board),
+          pulse_id: getFieldValue(item.document.fields.pulse_id),
+          board_id: getFieldValue(item.document.fields.board_id)
         };
         
         // Debug: Log específico para Monday.com
@@ -364,7 +373,65 @@ const sanitizePhone = (phone: string) => {
   return phone.startsWith('+') ? phone : `+${phone}`;
 };
 
+export interface DocumentAnalysis {
+  _name: string;
+  _id: string;
+  _createTime: string;
+  _updateTime: string;
+  last_update: string;
+  analise: string;
+  checklist: string;
+}
+
 export const documentService = {
+  async getDocumentAnalysis(pulseId: string): Promise<DocumentAnalysis | null> {
+    if (!pulseId) return null;
+
+    try {
+      const response = await axios.get(`${DOCUMENTS_BASE_URL}/analysis`, {
+        params: { id: pulseId },
+        headers: EXTERNAL_API_HEADERS
+      });
+
+      if (Array.isArray(response.data) && response.data.length > 0) {
+        return response.data[0] as DocumentAnalysis;
+      }
+
+      return null;
+    } catch (error) {
+      console.error('❌ Erro ao buscar análise de documentos:', error);
+      return null;
+    }
+  },
+
+  async generateDocumentAnalysis(pulseId: string): Promise<boolean> {
+    if (!pulseId) return false;
+
+    try {
+      // Usa URL completa como outras requisições externas
+      const response = await axios.post(
+        'https://n8n.rosenbaum.adv.br/webhook/entrou-em-analises',
+        {
+          event: {
+            pulseId: pulseId
+          }
+        },
+        {
+          headers: {
+            ...EXTERNAL_API_HEADERS,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      console.log('✅ Análise gerada com sucesso:', response.data);
+      return true;
+    } catch (error) {
+      console.error('❌ Erro ao gerar análise de documentos:', error);
+      throw error;
+    }
+  },
+
   async getDocumentsByEmail(email: string): Promise<DocumentRecord[]> {
     if (!email) return [];
 

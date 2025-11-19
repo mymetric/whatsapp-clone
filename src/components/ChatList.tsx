@@ -64,9 +64,20 @@ const ChatList: React.FC<ChatListProps> = ({
 
   const filteredPhones = useMemo(() => {
     return phones.filter(phone => {
-      // Filtro de texto
-      const searchLower = searchTerm.toLowerCase();
-      const matchesSearch = !searchTerm.trim() || (
+      // Filtro de texto geral
+      const searchLower = searchTerm.toLowerCase().trim();
+      const searchTermStr = searchTerm.trim();
+      
+      if (!searchTermStr) {
+        // Se não há termo de busca, apenas aplica filtros de dropdown
+        const matchesBoard = !filterBoard || phone.board === filterBoard;
+        const matchesEtiqueta = !filterEtiqueta || phone.etiqueta === filterEtiqueta;
+        const matchesStatus = !filterStatus || phone.status === filterStatus;
+        return matchesBoard && matchesEtiqueta && matchesStatus;
+      }
+      
+      // Busca em campos de texto (case-insensitive)
+      const textMatches = (
         (phone._id || '').toLowerCase().includes(searchLower) ||
         (phone.lead_name || '').toLowerCase().includes(searchLower) ||
         (phone.email || '').toLowerCase().includes(searchLower) ||
@@ -74,6 +85,18 @@ const ChatList: React.FC<ChatListProps> = ({
         (phone.status || '').toLowerCase().includes(searchLower) ||
         (phone.board || '').toLowerCase().includes(searchLower)
       );
+      
+      // Busca em IDs do Monday (pulse_id e board_id)
+      const pulseIdStr = phone.pulse_id ? String(phone.pulse_id).trim() : '';
+      const boardIdStr = phone.board_id ? String(phone.board_id).trim() : '';
+      
+      // Busca nos IDs do Monday (tanto com termo original quanto lowercase)
+      const mondayIdMatches = (
+        (pulseIdStr && (pulseIdStr.includes(searchTermStr) || pulseIdStr.toLowerCase().includes(searchLower))) ||
+        (boardIdStr && (boardIdStr.includes(searchTermStr) || boardIdStr.toLowerCase().includes(searchLower)))
+      );
+      
+      const matchesSearch = textMatches || mondayIdMatches;
 
       // Filtros de dropdown
       const matchesBoard = !filterBoard || phone.board === filterBoard;
@@ -148,7 +171,7 @@ const ChatList: React.FC<ChatListProps> = ({
         <div className="search-container">
           <input
             type="text"
-            placeholder="Buscar por nome, telefone, email..."
+            placeholder="Buscar por nome, telefone, email, ID Monday..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="search-input"
@@ -223,11 +246,21 @@ const ChatList: React.FC<ChatListProps> = ({
                       <span className="lead-name">{phone.lead_name}</span>
                       {phone.email && <span className="client-email">{phone.email}</span>}
                     </div>
-                    <span className="phone-number">{formatPhoneNumber(phone._id)}</span>
+                    <div className="phone-id-container">
+                      <span className="phone-number">{formatPhoneNumber(phone._id)}</span>
+                      {phone.pulse_id && (
+                        <span className="monday-id">ID: {phone.pulse_id}</span>
+                      )}
+                    </div>
                   </div>
                 ) : (
                   <div className="lead-name-container">
-                    <span className="phone-number">{formatPhoneNumber(phone._id)}</span>
+                    <div className="phone-id-container">
+                      <span className="phone-number">{formatPhoneNumber(phone._id)}</span>
+                      {phone.pulse_id && (
+                        <span className="monday-id">ID: {phone.pulse_id}</span>
+                      )}
+                    </div>
                     <span className="monday-not-found">⚠️ Telefone não encontrado no Monday</span>
                   </div>
                 )}
@@ -248,21 +281,6 @@ const ChatList: React.FC<ChatListProps> = ({
                     📋 {phone.board}
                   </span>
                 )}
-                {/* Link de teste temporário - sempre visível */}
-                <a 
-                  href="https://rosenbaum-adv.monday.com/boards/632454515/pulses/10001094405"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="monday-link"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    console.log('Monday link de teste clicado');
-                  }}
-                  title="Abrir no Monday.com (teste)"
-                >
-                  📋 Monday
-                </a>
-                
                 {phone.pulse_id && phone.board_id && (
                   <a 
                     href={`https://rosenbaum-adv.monday.com/boards/${phone.board_id}/pulses/${phone.pulse_id}`}
@@ -271,9 +289,14 @@ const ChatList: React.FC<ChatListProps> = ({
                     className="monday-link"
                     onClick={(e) => {
                       e.stopPropagation();
-                      console.log('Monday link clicado:', phone.pulse_id, phone.board_id);
+                      console.log('Monday link clicado:', {
+                        phoneId: phone._id,
+                        pulse_id: phone.pulse_id,
+                        board_id: phone.board_id,
+                        url: `https://rosenbaum-adv.monday.com/boards/${phone.board_id}/pulses/${phone.pulse_id}`
+                      });
                     }}
-                    title="Abrir no Monday.com"
+                    title={`Abrir no Monday.com (ID: ${phone.pulse_id})`}
                   >
                     📋 Monday
                   </a>

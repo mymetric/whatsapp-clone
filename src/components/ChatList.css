@@ -107,6 +107,18 @@
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
+.search-input.monday-id-search {
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid rgba(102, 126, 234, 0.3);
+  font-size: 13px;
+}
+
+.search-input.monday-id-search:focus {
+  background: white;
+  border-color: #667eea;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.2);
+}
+
 .filters-row {
   display: flex;
   flex-direction: column;
@@ -242,11 +254,27 @@
   font-style: italic;
 }
 
+.phone-id-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .phone-number {
   font-weight: 400;
   color: #6c757d;
   font-size: 13px;
   line-height: 1.2;
+}
+
+.monday-id {
+  font-weight: 400;
+  color: #adb5bd;
+  font-size: 11px;
+  line-height: 1.2;
+  opacity: 0.7;
+  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
 }
 
 .monday-not-found {

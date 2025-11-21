@@ -2,15 +2,17 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import './App.css';
 import ChatList from './components/ChatList';
 import ChatWindow from './components/ChatWindow';
+import CopilotSidebar from './components/CopilotSidebar';
 import Login from './components/Login';
 import Header from './components/Header';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
-import { Phone } from './types';
+import { Phone, Message } from './types';
 import { phoneService } from './services/api';
 
 const AppContent: React.FC = () => {
   const [phones, setPhones] = useState<Phone[]>([]);
   const [selectedPhone, setSelectedPhone] = useState<Phone | null>(null);
+  const [currentMessages, setCurrentMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
@@ -149,7 +151,14 @@ const AppContent: React.FC = () => {
           lastUpdate={lastUpdate}
           onManualRefresh={handleManualRefresh}
         />
-        <ChatWindow selectedPhone={selectedPhone} />
+        <ChatWindow 
+          selectedPhone={selectedPhone} 
+          onMessagesChange={setCurrentMessages}
+        />
+        <CopilotSidebar 
+          selectedPhone={selectedPhone}
+          messages={currentMessages}
+        />
       </div>
     </div>
   );

@@ -10,6 +10,7 @@ import './ChatWindow.css';
 
 interface ChatWindowProps {
   selectedPhone: Phone | null;
+  onMessagesChange?: (messages: Message[]) => void;
 }
 
 interface AISuggestion {
@@ -22,7 +23,7 @@ interface AISuggestion {
   last_message: string;
 }
 
-const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone }) => {
+const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone, onMessagesChange }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
   const [newMessage, setNewMessage] = useState('');
@@ -85,8 +86,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone }) => {
       const messagesData = await apiMessageService.getMessages(phoneNumber);
       
       // Ordenar mensagens por data e hora (mais antigas primeiro)
-      const sortedMessages = sortMessagesByTime(messagesData);
-      setMessages(sortedMessages);
+      updateMessages(messagesData);
     } catch (error) {
       console.error('Erro ao carregar mensagens:', error);
     } finally {
@@ -315,6 +315,18 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone }) => {
     });
   };
 
+  // Função auxiliar para atualizar mensagens e notificar o callback
+  const updateMessages = (updater: Message[] | ((prev: Message[]) => Message[])) => {
+    setMessages(prev => {
+      const newMessages = typeof updater === 'function' ? updater(prev) : updater;
+      const sorted = sortMessagesByTime([...newMessages]);
+      if (onMessagesChange) {
+        onMessagesChange(sorted);
+      }
+      return sorted;
+    });
+  };
+
   const handleSendMessage = async () => {
     if (!newMessage.trim() || !selectedPhone) return;
     
@@ -332,7 +344,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone }) => {
       content: messageText
     };
     
-    setMessages(prev => sortMessagesByTime([...prev, optimisticMessage]));
+    updateMessages(prev => [...prev, optimisticMessage]);
     
     try {
       // Enviar mensagem via API real
@@ -347,11 +359,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone }) => {
           _updateTime: new Date().toISOString(),
         };
         
-        setMessages(prev => 
-          sortMessagesByTime(
-            prev.map(msg => 
-              msg._id === optimisticMessage._id ? finalMessage : msg
-            )
+        updateMessages(prev => 
+          prev.map(msg => 
+            msg._id === optimisticMessage._id ? finalMessage : msg
           )
         );
         
@@ -364,7 +374,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone }) => {
     } catch (error) {
       console.error('❌ Erro ao enviar mensagem:', error);
       // Remover mensagem otimista em caso de erro
-      setMessages(prev => prev.filter(msg => msg._id !== optimisticMessage._id));
+      updateMessages(prev => prev.filter(msg => msg._id !== optimisticMessage._id));
       setNewMessage(messageText); // Restaurar texto
       
       // Mostrar erro para o usuário (opcional)
@@ -446,7 +456,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone }) => {
       content: messageText
     };
     
-    setMessages(prev => sortMessagesByTime([...prev, optimisticMessage]));
+    updateMessages(prev => [...prev, optimisticMessage]);
     
     try {
       // Enviar mensagem via API real
@@ -461,11 +471,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone }) => {
           _updateTime: new Date().toISOString(),
         };
         
-        setMessages(prev => 
-          sortMessagesByTime(
-            prev.map(msg => 
-              msg._id === optimisticMessage._id ? finalMessage : msg
-            )
+        updateMessages(prev => 
+          prev.map(msg => 
+            msg._id === optimisticMessage._id ? finalMessage : msg
           )
         );
         
@@ -477,7 +485,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone }) => {
     } catch (error) {
       console.error('❌ Erro ao enviar sugestão de IA:', error);
       // Remover mensagem otimista em caso de erro
-      setMessages(prev => prev.filter(msg => msg._id !== optimisticMessage._id));
+      updateMessages(prev => prev.filter(msg => msg._id !== optimisticMessage._id));
       
       // Mostrar erro para o usuário
       alert(`Erro ao enviar sugestão: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
@@ -560,7 +568,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone }) => {
       content: grokResponse
     };
     
-    setMessages(prev => sortMessagesByTime([...prev, optimisticMessage]));
+    updateMessages(prev => [...prev, optimisticMessage]);
     
     try {
       const result = await messageService.sendMessage(selectedPhone._id, grokResponse);
@@ -573,11 +581,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone }) => {
           _updateTime: new Date().toISOString(),
         };
         
-        setMessages(prev => 
-          sortMessagesByTime(
-            prev.map(msg => 
-              msg._id === optimisticMessage._id ? finalMessage : msg
-            )
+        updateMessages(prev => 
+          prev.map(msg => 
+            msg._id === optimisticMessage._id ? finalMessage : msg
           )
         );
         
@@ -588,7 +594,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone }) => {
       
     } catch (error) {
       console.error('❌ Erro ao enviar resposta do Grok:', error);
-      setMessages(prev => prev.filter(msg => msg._id !== optimisticMessage._id));
+      updateMessages(prev => prev.filter(msg => msg._id !== optimisticMessage._id));
       alert(`Erro ao enviar resposta: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
     }
   };

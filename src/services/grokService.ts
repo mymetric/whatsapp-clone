@@ -102,7 +102,7 @@ Instruções:
         body: JSON.stringify({
           model: 'grok-3',
           messages: messages,
-          max_tokens: context?.systemPrompt ? 4000 : 1000, // Mais tokens para o copiloto
+          max_tokens: context?.systemPrompt ? 40000 : 1000, // Mais tokens para o copiloto
           temperature: 0.7,
           stream: false
         })
@@ -124,10 +124,10 @@ Instruções:
       let generatedText = data.choices[0].message.content;
       console.log('📝 Texto gerado:', generatedText);
 
-      // Limitar resposta a 4000 caracteres como segurança
-      if (generatedText.length > 4000) {
-        console.warn('⚠️ Resposta excedeu 4000 caracteres, truncando...');
-        generatedText = generatedText.substring(0, 4000).trim() + '...';
+      // Limitar resposta a 40000 caracteres como segurança (apenas para copiloto)
+      if (context?.systemPrompt && generatedText.length > 40000) {
+        console.warn('⚠️ Resposta excedeu 40000 caracteres, truncando...');
+        generatedText = generatedText.substring(0, 40000).trim() + '...';
       }
 
       return generatedText.trim();

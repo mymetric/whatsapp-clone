@@ -8,7 +8,9 @@ interface DocumentsTabProps {
   selectedPhone: Phone | null;
 }
 
-const MAX_PREVIEW_LENGTH = 500;
+// Valor auxiliar apenas para detectar textos muito longos.
+// A exibição é limitada a 3 linhas via CSS; este valor é só um fallback.
+const MAX_PREVIEW_LENGTH = 300;
 
 const DocumentsTab: React.FC<DocumentsTabProps> = ({ selectedPhone }) => {
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
@@ -373,11 +375,11 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ selectedPhone }) => {
               const isExpanded = Boolean(expandedDocuments[document.id]);
               const directionLabel = document.direction ? directionLabels[document.direction] : 'Documento';
               const originLabel = originLabels[document.origin];
-              const hasLongText = document.text ? document.text.length > MAX_PREVIEW_LENGTH : false;
-              const displayText =
-                document.text && !isExpanded && hasLongText
-                  ? `${document.text.slice(0, MAX_PREVIEW_LENGTH)}…`
-                  : document.text;
+              const fullText = document.text || '';
+
+              // Detectar se o texto é suficientemente longo para mostrar botão "Ver mais"
+              const lineCount = fullText.split(/\r?\n/).length;
+              const hasLongText = lineCount > 3 || fullText.length > MAX_PREVIEW_LENGTH;
 
               return (
                 <div key={`${document.origin}-${document.id}`} className="document-card">
@@ -420,15 +422,19 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ selectedPhone }) => {
                     </div>
                   )}
 
-                  {displayText && (
-                    <div className="document-text">
-                      <pre>{displayText}</pre>
+                  {fullText && (
+                    <div
+                      className={`document-text ${
+                        hasLongText && !isExpanded ? 'document-text-collapsed' : ''
+                      }`}
+                    >
+                      <pre>{fullText}</pre>
                       {hasLongText && (
                         <button
                           className="document-toggle-button"
                           onClick={() => handleToggleDocument(document.id)}
                         >
-                          {isExpanded ? 'Ver menos' : 'Ver completo'}
+                          {isExpanded ? 'Ver menos' : 'Ver mais'}
                         </button>
                       )}
                     </div>

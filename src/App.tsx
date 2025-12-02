@@ -5,6 +5,7 @@ import ChatWindow from './components/ChatWindow';
 import CopilotSidebar from './components/CopilotSidebar';
 import Login from './components/Login';
 import Header from './components/Header';
+import PromptsManager from './components/PromptsManager';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { Phone, Message } from './types';
 import { phoneService } from './services/api';
@@ -17,6 +18,7 @@ const AppContent: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [showPromptsPage, setShowPromptsPage] = useState(false);
   const { isAuthenticated } = useAuth();
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const lastActivityRef = useRef<Date>(new Date());
@@ -138,9 +140,20 @@ const AppContent: React.FC = () => {
     );
   }
 
+  if (showPromptsPage) {
+    return (
+      <div className="app fade-in">
+        <Header onPromptsClick={() => setShowPromptsPage(false)} />
+        <div className="prompts-page-container">
+          <PromptsManager onClose={() => setShowPromptsPage(false)} />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app fade-in">
-      <Header />
+      <Header onPromptsClick={() => setShowPromptsPage(true)} />
       <div className="app-main">
         <ChatList
           phones={phones}

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Phone, Message } from '../types';
-import { messageService as apiMessageService, aiSuggestionService, emailService } from '../services/api';
+import { messageService as apiMessageService, emailService, promptService, Prompt } from '../services/api';
 import { messageService } from '../services/messageService';
 import { grokService } from '../services/grokService';
 import MondayTab from './MondayTab';
@@ -13,33 +13,19 @@ interface ChatWindowProps {
   onMessagesChange?: (messages: Message[]) => void;
 }
 
-interface AISuggestion {
-  _name: string;
-  _id: string;
-  _createTime: string;
-  _updateTime: string;
-  message: string;
-  chat_phone: string;
-  last_message: string;
-}
-
 const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone, onMessagesChange }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
   const [newMessage, setNewMessage] = useState('');
-  const [aiSuggestion, setAiSuggestion] = useState<AISuggestion | null>(null);
-  const [showSuggestion, setShowSuggestion] = useState(false);
-  const [showFullSuggestion, setShowFullSuggestion] = useState(false);
   const [showInput, setShowInput] = useState(false);
   const [activeTab, setActiveTab] = useState<'chat' | 'emails' | 'documents' | 'monday'>('chat');
-  const [showGrokModal, setShowGrokModal] = useState(false);
-  const [grokPrompt, setGrokPrompt] = useState('');
-  const [grokLoading, setGrokLoading] = useState(false);
-  const [grokResponse, setGrokResponse] = useState('');
   const [isUpdating, setIsUpdating] = useState(false);
   const [nextUpdateIn, setNextUpdateIn] = useState(20);
   const [contactEmail, setContactEmail] = useState<string | undefined>(selectedPhone?.email);
   const [emailData, setEmailData] = useState<any>(null);
+  const [prompts, setPrompts] = useState<Prompt[]>([]);
+  const [loadingPrompts, setLoadingPrompts] = useState(false);
+  const [usingPrompt, setUsingPrompt] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -98,28 +84,6 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone, onMessagesChange
     }
   }, [selectedPhone]);
 
-  const loadAISuggestion = useCallback(async () => {
-    if (!selectedPhone) return;
-    
-    try {
-      console.log('🔄 Carregando sugestão de IA para:', selectedPhone._id);
-      const phoneNumber = selectedPhone._id.replace('+', '');
-      console.log('📞 Número formatado:', phoneNumber);
-      const suggestion = await aiSuggestionService.getLastAISuggestion(phoneNumber);
-      console.log('🤖 Sugestão recebida:', suggestion);
-      setAiSuggestion(suggestion);
-      if (suggestion) {
-        console.log('✅ Exibindo sugestão de IA');
-        setShowSuggestion(true);
-      } else {
-        console.log('❌ Nenhuma sugestão encontrada');
-        setShowSuggestion(false);
-      }
-    } catch (error) {
-      console.error('❌ Erro ao carregar sugestão de IA:', error);
-      setShowSuggestion(false);
-    }
-  }, [selectedPhone]);
 
   // Buscar email do contato quando selecionado
   useEffect(() => {
@@ -215,9 +179,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone, onMessagesChange
   useEffect(() => {
     if (selectedPhone) {
       loadMessages();
-      loadAISuggestion();
     }
-  }, [selectedPhone, loadMessages, loadAISuggestion]);
+  }, [selectedPhone, loadMessages]);
 
   // Live updates a cada 20 segundos
   useEffect(() => {
@@ -253,6 +216,23 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone, onMessagesChange
   useEffect(() => {
     adjustTextareaHeight();
   }, [newMessage, adjustTextareaHeight]);
+
+  // Carregar prompts quando o componente montar
+  useEffect(() => {
+    const loadPrompts = async () => {
+      setLoadingPrompts(true);
+      try {
+        const promptsData = await promptService.getPrompts();
+        console.log('📋 Prompts carregados:', promptsData);
+        setPrompts(promptsData);
+      } catch (error) {
+        console.error('Erro ao carregar prompts:', error);
+      } finally {
+        setLoadingPrompts(false);
+      }
+    };
+    loadPrompts();
+  }, []);
 
   const formatPhoneNumber = (phone: string) => {
     if (!phone) return 'Número não disponível';
@@ -394,19 +374,6 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone, onMessagesChange
     adjustTextareaHeight();
   };
 
-  const handleUseSuggestion = () => {
-    if (aiSuggestion) {
-      setNewMessage(aiSuggestion.message);
-      setShowSuggestion(false);
-      setShowInput(true); // Mostrar caixa de texto ao editar sugestão
-      
-      // Ajustar altura do textarea após definir o texto
-      setTimeout(() => {
-        adjustTextareaHeight();
-      }, 0);
-    }
-  };
-
   const handleShowInput = () => {
     setShowInput(true);
     // Focar no textarea após mostrar
@@ -422,182 +389,130 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone, onMessagesChange
     setNewMessage(''); // Limpar mensagem ao ocultar
   };
 
-  const handleDismissSuggestion = () => {
-    setShowSuggestion(false);
-  };
+  const getLeadContext = async (): Promise<string> => {
+    if (!selectedPhone) return '';
 
-  const handleShowFullSuggestion = () => {
-    setShowFullSuggestion(true);
-  };
-
-  const handleCloseFullSuggestion = () => {
-    setShowFullSuggestion(false);
-  };
-
-  const truncateText = (text: string, maxLength: number = 350) => {
-    if (text.length <= maxLength) return text;
-    return text.substring(0, maxLength) + '...';
-  };
-
-  const handleSendSuggestion = async () => {
-    if (!aiSuggestion || !selectedPhone) return;
+    let context = `Dados do Lead:\n`;
+    context += `- Nome: ${selectedPhone.lead_name || 'Não informado'}\n`;
+    context += `- Telefone: ${selectedPhone._id}\n`;
+    context += `- Email: ${selectedPhone.email || 'Não informado'}\n`;
+    context += `- Status: ${selectedPhone.status || 'Não informado'}\n`;
+    context += `- Etiqueta: ${selectedPhone.etiqueta || 'Não informado'}\n`;
     
-    const messageText = aiSuggestion.message;
-    setShowSuggestion(false);
-    
-    // Criar mensagem otimista (aparece imediatamente)
-    const optimisticMessage: Message = {
-      _name: '',
-      _id: `temp_${Date.now()}`,
-      _createTime: new Date().toISOString(),
-      _updateTime: new Date().toISOString(),
-      chat_phone: selectedPhone._id ? selectedPhone._id.replace('+', '') : '',
-      source: 'Member',
-      content: messageText
-    };
-    
-    updateMessages(prev => [...prev, optimisticMessage]);
-    
-    try {
-      // Enviar mensagem via API real
-      const result = await messageService.sendMessage(selectedPhone._id, messageText);
-      
-      if (result.success) {
-        // Atualizar mensagem otimista com ID final
-        const finalMessage: Message = {
-          ...optimisticMessage,
-          _id: Date.now().toString(),
-          _createTime: new Date().toISOString(),
-          _updateTime: new Date().toISOString(),
-        };
-        
-        updateMessages(prev => 
-            prev.map(msg => 
-              msg._id === optimisticMessage._id ? finalMessage : msg
-          )
-        );
-        
-        console.log('✅ Sugestão de IA enviada com sucesso');
-      } else {
-        throw new Error(result.error || 'Erro ao enviar sugestão');
-      }
-      
-    } catch (error) {
-      console.error('❌ Erro ao enviar sugestão de IA:', error);
-      // Remover mensagem otimista em caso de erro
-      updateMessages(prev => prev.filter(msg => msg._id !== optimisticMessage._id));
-      
-      // Mostrar erro para o usuário
-      alert(`Erro ao enviar sugestão: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
+    if (selectedPhone.board) {
+      context += `- Board Monday.com: ${selectedPhone.board}\n`;
     }
-  };
+    if (selectedPhone.pulse_id) {
+      context += `- Pulse ID: ${selectedPhone.pulse_id}\n`;
+    }
 
-  const handleOpenGrokModal = () => {
-    setShowGrokModal(true);
-    setGrokPrompt('');
-    setGrokResponse('');
-  };
+    // Adicionar últimas mensagens da conversa
+    if (messages.length > 0) {
+      context += `\nÚltimas mensagens da conversa:\n`;
+      const recentMessages = messages.slice(-10);
+      recentMessages.forEach((msg, idx) => {
+        const sender = msg.source === 'Member' ? 'Você' : 'Cliente';
+        const time = new Date(msg._updateTime).toLocaleString('pt-BR');
+        context += `${idx + 1}. [${time}] ${sender}: ${msg.content}\n`;
+      });
+    }
 
-  const handleCloseGrokModal = () => {
-    setShowGrokModal(false);
-    setGrokPrompt('');
-    setGrokResponse('');
-  };
-
-  const handleGrokSubmit = async () => {
-    if (!grokPrompt.trim() || !selectedPhone) return;
-    
-    setGrokLoading(true);
+    // Tentar buscar emails do contato
     try {
-      // Preparar contexto da conversa
+      const emailData = await emailService.getEmailForContact(selectedPhone);
+      if (emailData && typeof emailData === 'object') {
+        const data = emailData as any;
+        const emails: any[] = [];
+        
+        if (Array.isArray(data.destination)) {
+          emails.push(...data.destination.filter((e: any) => e && Object.keys(e).length > 0));
+        }
+        if (Array.isArray(data.sender)) {
+          emails.push(...data.sender.filter((e: any) => e && Object.keys(e).length > 0));
+        }
+
+        if (emails.length > 0) {
+          context += `\nEmails trocados (${emails.length} encontrados):\n`;
+          emails.slice(0, 5).forEach((email, idx) => {
+            context += `${idx + 1}. Assunto: ${email.subject || 'Sem assunto'}\n`;
+            if (email.text) {
+              context += `   Preview: ${email.text.substring(0, 100)}...\n`;
+            }
+          });
+        }
+      }
+    } catch (error) {
+      console.log('Não foi possível carregar emails para o contexto');
+    }
+
+    return context;
+  };
+
+
+  const handleUsePrompt = async (prompt: Prompt) => {
+    if (!selectedPhone || usingPrompt === prompt.id) return;
+
+    setUsingPrompt(prompt.id);
+    try {
+      // Obter contexto do lead
+      const leadContext = await getLeadContext();
+
+      // Preparar prompt para o Grok usando o prompt selecionado
+      const systemContext = `${prompt.content}
+
+${leadContext}
+
+Instruções:
+- Seja sempre profissional e prestativo
+- Mantenha um tom amigável e próximo
+- Responda de forma clara e objetiva
+- Use emojis moderadamente para tornar a conversa mais amigável
+- Mantenha as respostas concisas mas completas
+- Baseie sua resposta no contexto do lead e nas últimas mensagens da conversa
+- IMPORTANTE: Forneça respostas completas e detalhadas, mas NUNCA gere respostas com mais de 4000 caracteres.
+Se sua resposta estiver ficando muito longa, resuma os pontos principais de forma concisa e objetiva.`;
+
       const lastMessage = messages.length > 0 ? messages[messages.length - 1].content : '';
-      const conversationHistory = messages.slice(-5).map(msg => 
+      const conversationHistory = messages.slice(-10).map(msg => 
         `${msg.source === 'Member' ? 'Você' : 'Cliente'}: ${msg.content}`
       ).join('\n');
 
-      const context = {
-        lastMessage,
-        phoneNumber: selectedPhone._id,
-        conversationHistory
-      };
+      const userPrompt = lastMessage 
+        ? `Gere uma resposta profissional e adequada para a última mensagem do cliente: "${lastMessage}"`
+        : `Gere uma mensagem de abertura profissional e amigável para iniciar uma conversa com este cliente.`;
 
-      const response = await grokService.generateNewSuggestion(
-        aiSuggestion?.message || '',
-        grokPrompt,
-        context
+      const response = await grokService.generateResponse(
+        userPrompt,
+        {
+          systemPrompt: systemContext,
+          conversationHistory,
+          phoneNumber: selectedPhone._id,
+          lastMessage
+        }
       );
 
-      setGrokResponse(response);
+      // Colocar a resposta no campo de edição ao invés de enviar diretamente
+      setNewMessage(response);
+      setShowInput(true);
+      
+      // Ajustar altura do textarea após definir o texto
+      setTimeout(() => {
+        adjustTextareaHeight();
+        if (textareaRef.current) {
+          textareaRef.current.focus();
+        }
+      }, 0);
+      
+      console.log('✅ Resposta gerada com prompt e colocada no campo de edição');
+      
     } catch (error) {
-      console.error('❌ Erro ao gerar resposta com Grok:', error);
-      setGrokResponse(`Erro ao gerar resposta: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
+      console.error('❌ Erro ao usar prompt:', error);
+      alert(`Erro ao gerar resposta: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
     } finally {
-      setGrokLoading(false);
+      setUsingPrompt(null);
     }
   };
 
-  const handleUseGrokResponse = () => {
-    if (!grokResponse) return;
-    
-    // Atualizar a sugestão atual com a resposta do Grok
-    if (aiSuggestion) {
-      setAiSuggestion({
-        ...aiSuggestion,
-        message: grokResponse
-      });
-    }
-    
-    // Fechar modal
-    handleCloseGrokModal();
-  };
-
-  const handleSendGrokResponse = async () => {
-    if (!grokResponse || !selectedPhone) return;
-    
-    handleCloseGrokModal();
-    setShowSuggestion(false);
-    
-    // Criar mensagem otimista
-    const optimisticMessage: Message = {
-      _name: '',
-      _id: `temp_${Date.now()}`,
-      _createTime: new Date().toISOString(),
-      _updateTime: new Date().toISOString(),
-      chat_phone: selectedPhone._id ? selectedPhone._id.replace('+', '') : '',
-      source: 'Member',
-      content: grokResponse
-    };
-    
-    updateMessages(prev => [...prev, optimisticMessage]);
-    
-    try {
-      const result = await messageService.sendMessage(selectedPhone._id, grokResponse);
-      
-      if (result.success) {
-        const finalMessage: Message = {
-          ...optimisticMessage,
-          _id: Date.now().toString(),
-          _createTime: new Date().toISOString(),
-          _updateTime: new Date().toISOString(),
-        };
-        
-        updateMessages(prev => 
-            prev.map(msg => 
-              msg._id === optimisticMessage._id ? finalMessage : msg
-          )
-        );
-        
-        console.log('✅ Resposta do Grok enviada com sucesso');
-      } else {
-        throw new Error(result.error || 'Erro ao enviar resposta do Grok');
-      }
-      
-    } catch (error) {
-      console.error('❌ Erro ao enviar resposta do Grok:', error);
-      updateMessages(prev => prev.filter(msg => msg._id !== optimisticMessage._id));
-      alert(`Erro ao enviar resposta: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
-    }
-  };
 
   if (!selectedPhone) {
     return (
@@ -822,115 +737,38 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone, onMessagesChange
         <MondayTab phone={selectedPhone._id} />
       )}
 
-      {showSuggestion && aiSuggestion && activeTab === 'chat' && (
-        <div className="ai-suggestion">
-          <div className="suggestion-header">
-            <span className="suggestion-icon">🤖</span>
-            <span className="suggestion-title">Sugestão de IA</span>
-            <button 
-              className="suggestion-close" 
-              onClick={handleDismissSuggestion}
-              title="Fechar sugestão"
-            >
-              ×
-            </button>
-          </div>
-          <div className="suggestion-content">
-            {truncateText(aiSuggestion.message)}
-            {aiSuggestion.message.length > 350 && (
-              <button 
-                className="see-more-btn"
-                onClick={handleShowFullSuggestion}
-              >
-                Ver mais
-              </button>
-            )}
-          </div>
-          <div className="suggestion-actions">
-            <button 
-              className="suggestion-use-btn" 
-              onClick={handleUseSuggestion}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
-              </svg>
-              Editar Sugestão
-            </button>
-            <button 
-              className="suggestion-grok-btn" 
-              onClick={handleOpenGrokModal}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
-              </svg>
-              Nova Resposta com Grok
-            </button>
-            <button 
-              className="suggestion-send-btn" 
-              onClick={handleSendSuggestion}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
-              </svg>
-              Enviar Sugestão
-            </button>
-            <button 
-              className="suggestion-write-btn" 
-              onClick={handleShowInput}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
-              </svg>
-              Escrever Mensagem
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Modal para texto completo da sugestão */}
-      {showFullSuggestion && aiSuggestion && (
-        <div className="suggestion-modal-overlay" onClick={handleCloseFullSuggestion}>
-          <div className="suggestion-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>Sugestão de IA Completa</h3>
-              <button 
-                className="modal-close" 
-                onClick={handleCloseFullSuggestion}
-                title="Fechar"
-              >
-                ×
-              </button>
+      {/* Botões de prompts - apenas na aba chat */}
+      {activeTab === 'chat' && (
+        <div className="prompts-buttons-container">
+          {prompts.length > 0 ? (
+            <>
+              <div className="prompts-buttons-label">Prompts cadastrados:</div>
+              <div className="prompts-buttons">
+                {prompts.map((prompt) => (
+                  <button
+                    key={prompt.id}
+                    onClick={() => handleUsePrompt(prompt)}
+                    disabled={usingPrompt === prompt.id || !selectedPhone}
+                    className={`prompt-button ${usingPrompt === prompt.id ? 'using' : ''}`}
+                    title={prompt.description || prompt.name}
+                  >
+                    {usingPrompt === prompt.id ? (
+                      <>
+                        <div className="prompt-loading"></div>
+                        <span>Gerando...</span>
+                      </>
+                    ) : (
+                      <span>{prompt.name}</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="prompts-buttons-label" style={{ fontStyle: 'italic', opacity: 0.6 }}>
+              Nenhum prompt cadastrado. Cadastre prompts na página de Prompts.
             </div>
-            <div className="modal-content">
-              {aiSuggestion.message}
-            </div>
-            <div className="modal-actions">
-              <button 
-                className="modal-use-btn" 
-                onClick={() => {
-                  handleUseSuggestion();
-                  handleCloseFullSuggestion();
-                }}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
-                </svg>
-                Editar Sugestão
-              </button>
-              <button 
-                className="modal-send-btn" 
-                onClick={() => {
-                  handleSendSuggestion();
-                  handleCloseFullSuggestion();
-                }}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
-                </svg>
-                Enviar Sugestão
-              </button>
-            </div>
-          </div>
+          )}
         </div>
       )}
 
@@ -972,7 +810,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone, onMessagesChange
             </button>
           </div>
         </div>
-      ) : !showSuggestion && (
+      ) : (
         <div className="chat-input-placeholder">
           <button
             onClick={handleShowInput}
@@ -984,89 +822,6 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone, onMessagesChange
             </svg>
             <span>Escrever mensagem</span>
           </button>
-        </div>
-      )}
-
-      {/* Modal do Grok */}
-      {showGrokModal && (
-        <div className="grok-modal-overlay" onClick={handleCloseGrokModal}>
-          <div className="grok-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="grok-modal-header">
-              <div className="grok-header-info">
-                <span className="grok-icon">🤖</span>
-                <h3>Nova Resposta com Grok</h3>
-              </div>
-              <button 
-                className="grok-modal-close" 
-                onClick={handleCloseGrokModal}
-                title="Fechar"
-              >
-                ×
-              </button>
-            </div>
-            
-            <div className="grok-modal-content">
-              <div className="grok-prompt-section">
-                <label htmlFor="grok-prompt">Descreva o que você gostaria de uma nova resposta:</label>
-                <textarea
-                  id="grok-prompt"
-                  value={grokPrompt}
-                  onChange={(e) => setGrokPrompt(e.target.value)}
-                  placeholder="Ex: Quero uma resposta mais formal, ou mais amigável, ou que mencione nossos produtos..."
-                  rows={3}
-                  disabled={grokLoading}
-                />
-                <button 
-                  className="grok-submit-btn"
-                  onClick={handleGrokSubmit}
-                  disabled={!grokPrompt.trim() || grokLoading}
-                >
-                  {grokLoading ? (
-                    <>
-                      <div className="grok-loading"></div>
-                      Gerando resposta...
-                    </>
-                  ) : (
-                    <>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
-                      </svg>
-                      Gerar Nova Resposta
-                    </>
-                  )}
-                </button>
-              </div>
-
-              {grokResponse && (
-                <div className="grok-response-section">
-                  <label>Nova resposta gerada:</label>
-                  <div className="grok-response-content">
-                    {grokResponse}
-                  </div>
-                  <div className="grok-response-actions">
-                    <button 
-                      className="grok-use-btn"
-                      onClick={handleUseGrokResponse}
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
-                      </svg>
-                      Usar Esta Resposta
-                    </button>
-                    <button 
-                      className="grok-send-btn"
-                      onClick={handleSendGrokResponse}
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
-                      </svg>
-                      Enviar Diretamente
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
         </div>
       )}
       

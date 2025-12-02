@@ -2,7 +2,11 @@ import React from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import './Header.css';
 
-const Header: React.FC = () => {
+interface HeaderProps {
+  onPromptsClick?: () => void;
+}
+
+const Header: React.FC<HeaderProps> = ({ onPromptsClick }) => {
   const { user, logout } = useAuth();
 
   if (!user) return null;
@@ -24,6 +28,14 @@ const Header: React.FC = () => {
           </div>
         </div>
         <div className="header-right">
+          {onPromptsClick && (
+            <button onClick={onPromptsClick} className="header-prompts-button" title="Gerenciar prompts da IA">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M3 5h18v2H3V5zm4 6h14v2H7v-2zm-4 6h18v2H3v-2z" />
+              </svg>
+              <span>Prompts</span>
+            </button>
+          )}
           <span className="user-info">
             Olá, {user.name}
           </span>

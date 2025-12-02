@@ -3,7 +3,8 @@ import ReactMarkdown from 'react-markdown';
 import { Phone, Message } from '../types';
 import { grokService } from '../services/grokService';
 import { messageService } from '../services/messageService';
-import { emailService } from '../services/api';
+import { emailService, documentService } from '../services/api';
+import { mondayService } from '../services/mondayService';
 import './CopilotSidebar.css';
 
 interface CopilotSidebarProps {
@@ -21,7 +22,7 @@ const CopilotSidebar: React.FC<CopilotSidebarProps> = ({ selectedPhone, messages
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [isMinimized, setIsMinimized] = useState(false);
+  const [isMinimized, setIsMinimized] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
   
   // Quando expandir do minimizado, garantir que não abra direto em fullscreen
@@ -73,6 +74,7 @@ const CopilotSidebar: React.FC<CopilotSidebarProps> = ({ selectedPhone, messages
     scrollToBottom();
   }, [chatMessages]);
 
+
   useEffect(() => {
     if (textareaRef.current) {
       // Sempre garantir altura mínima primeiro
@@ -120,8 +122,8 @@ const CopilotSidebar: React.FC<CopilotSidebarProps> = ({ selectedPhone, messages
 
     // Adicionar últimas mensagens da conversa
     if (messages.length > 0) {
-      context += `\nÚltimas mensagens da conversa:\n`;
-      const recentMessages = messages.slice(-10);
+      context += `\n=== ÚLTIMAS MENSAGENS DA CONVERSA ===\n`;
+      const recentMessages = messages.slice(-50); // Aumentado para 50 mensagens
       recentMessages.forEach((msg, idx) => {
         const sender = msg.source === 'Member' ? 'Você' : 'Cliente';
         const time = new Date(msg._updateTime).toLocaleString('pt-BR');
@@ -129,7 +131,7 @@ const CopilotSidebar: React.FC<CopilotSidebarProps> = ({ selectedPhone, messages
       });
     }
 
-    // Tentar buscar emails do contato
+    // Buscar emails do contato
     try {
       const emailData = await emailService.getEmailForContact(selectedPhone);
       if (emailData && typeof emailData === 'object') {
@@ -144,17 +146,76 @@ const CopilotSidebar: React.FC<CopilotSidebarProps> = ({ selectedPhone, messages
         }
 
         if (emails.length > 0) {
-          context += `\nEmails trocados (${emails.length} encontrados):\n`;
-          emails.slice(0, 5).forEach((email, idx) => {
+          context += `\n=== EMAILS TROCADOS (${emails.length} encontrados) ===\n`;
+          emails.slice(0, 30).forEach((email, idx) => {
             context += `${idx + 1}. Assunto: ${email.subject || 'Sem assunto'}\n`;
             if (email.text) {
-              context += `   Preview: ${email.text.substring(0, 100)}...\n`;
+              const emailText = email.text.length > 1000 ? email.text.substring(0, 1000) + '...' : email.text;
+              context += `   Conteúdo: ${emailText}\n`;
             }
+            if (email.html) {
+              const htmlText = email.html.length > 500 ? email.html.substring(0, 500) + '...' : email.html;
+              context += `   HTML Preview: ${htmlText}\n`;
+            }
+            context += `\n`;
           });
         }
       }
     } catch (error) {
       console.log('Não foi possível carregar emails para o contexto');
+    }
+
+    // Buscar documentos do contato
+    try {
+      const documents = await documentService.getDocumentsForContact(selectedPhone);
+      if (documents && documents.length > 0) {
+        context += `\n=== DOCUMENTOS ENCONTRADOS (${documents.length} documentos) ===\n`;
+        documents.slice(0, 50).forEach((doc, idx) => {
+          context += `${idx + 1}. ${doc.name || 'Documento sem nome'}\n`;
+          context += `   Origem: ${doc.origin || 'Não especificado'}\n`;
+          if (doc.direction) {
+            context += `   Direção: ${doc.direction === 'sent' ? 'Enviado' : 'Recebido'}\n`;
+          }
+          if (doc.text) {
+            const docText = doc.text.length > 2000 ? doc.text.substring(0, 2000) + '...' : doc.text;
+            context += `   Conteúdo: ${docText}\n`;
+          }
+          if (doc.metadata && Object.keys(doc.metadata).length > 0) {
+            const metadataStr = JSON.stringify(doc.metadata);
+            const metadataPreview = metadataStr.length > 500 ? metadataStr.substring(0, 500) + '...' : metadataStr;
+            context += `   Metadados: ${metadataPreview}\n`;
+          }
+          context += `\n`;
+        });
+      }
+    } catch (error) {
+      console.log('Não foi possível carregar documentos para o contexto');
+    }
+
+    // Buscar dados completos do Monday.com
+    try {
+      const mondayData = await mondayService.getMondayUpdates(selectedPhone._id);
+      if (mondayData && mondayData.monday_updates && mondayData.monday_updates.items) {
+        context += `\n=== DADOS DO MONDAY.COM ===\n`;
+        mondayData.monday_updates.items.forEach((item, itemIdx) => {
+          context += `Item ${itemIdx + 1}: ${item.name || 'Sem nome'}\n`;
+          if (item.updates && item.updates.length > 0) {
+            context += `  Atualizações (${item.updates.length}):\n`;
+            item.updates.slice(0, 10).forEach((update, updateIdx) => {
+              const formattedBody = mondayService.formatUpdateBody(update.body);
+              const formattedDate = mondayService.formatDate(update.created_at);
+              context += `    ${updateIdx + 1}. [${formattedDate}]`;
+              if (update.creator) {
+                context += ` por ${update.creator.name}`;
+              }
+              context += `\n      ${formattedBody.substring(0, 500)}${formattedBody.length > 500 ? '...' : ''}\n`;
+            });
+          }
+          context += `\n`;
+        });
+      }
+    } catch (error) {
+      console.log('Não foi possível carregar dados do Monday.com para o contexto');
     }
 
     return context;
@@ -330,65 +391,65 @@ Se sua resposta estiver ficando muito longa, resuma os pontos principais de form
       </div>
       
       <div className="copilot-messages-container">
-        {chatMessages.length === 0 ? (
-          <div className="copilot-welcome">
-            <div className="welcome-icon">👋</div>
-            <h4>Olá! Sou seu copiloto de IA</h4>
-            <p>Posso ajudar você a:</p>
-            <ul>
-              <li>Analisar os dados do lead</li>
-              <li>Entender o histórico de conversas</li>
-              <li>Sugerir estratégias de abordagem</li>
-              <li>Revisar emails trocados</li>
-              <li>Fornecer insights sobre o cliente</li>
-            </ul>
-            <p className="welcome-hint">Faça uma pergunta para começar!</p>
-          </div>
-        ) : (
-          <div className="copilot-messages">
-            {chatMessages.map((msg, idx) => (
-              <div key={idx} className={`copilot-message ${msg.role}`}>
-                <div className="copilot-message-content">
-                  {msg.role === 'assistant' && (
-                    <div className="copilot-avatar">🤖</div>
-                  )}
-                  <div className="copilot-message-text">
-                    {msg.role === 'assistant' ? (
-                      <ReactMarkdown>{msg.content}</ReactMarkdown>
-                    ) : (
-                      msg.content
-                    )}
-                  </div>
-                </div>
-                <div className="copilot-message-time">
-                  {msg.timestamp.toLocaleTimeString('pt-BR', { 
-                    hour: '2-digit', 
-                    minute: '2-digit' 
-                  })}
-                </div>
+            {chatMessages.length === 0 ? (
+              <div className="copilot-welcome">
+                <div className="welcome-icon">👋</div>
+                <h4>Olá! Sou seu copiloto de IA</h4>
+                <p>Posso ajudar você a:</p>
+                <ul>
+                  <li>Analisar os dados do lead</li>
+                  <li>Entender o histórico de conversas</li>
+                  <li>Sugerir estratégias de abordagem</li>
+                  <li>Revisar emails trocados</li>
+                  <li>Fornecer insights sobre o cliente</li>
+                </ul>
+                <p className="welcome-hint">Faça uma pergunta para começar!</p>
               </div>
-            ))}
-            {isLoading && (
-              <div className="copilot-message assistant">
-                <div className="copilot-message-content">
-                  <div className="copilot-avatar">🤖</div>
-                  <div className="copilot-message-text">
-                    <div className="loading-dots">
-                      <span></span>
-                      <span></span>
-                      <span></span>
+            ) : (
+              <div className="copilot-messages">
+                {chatMessages.map((msg, idx) => (
+                  <div key={idx} className={`copilot-message ${msg.role}`}>
+                    <div className="copilot-message-content">
+                      {msg.role === 'assistant' && (
+                        <div className="copilot-avatar">🤖</div>
+                      )}
+                      <div className="copilot-message-text">
+                        {msg.role === 'assistant' ? (
+                          <ReactMarkdown>{msg.content}</ReactMarkdown>
+                        ) : (
+                          msg.content
+                        )}
+                      </div>
+                    </div>
+                    <div className="copilot-message-time">
+                      {msg.timestamp.toLocaleTimeString('pt-BR', { 
+                        hour: '2-digit', 
+                        minute: '2-digit' 
+                      })}
                     </div>
                   </div>
-                </div>
+                ))}
+                {isLoading && (
+                  <div className="copilot-message assistant">
+                    <div className="copilot-message-content">
+                      <div className="copilot-avatar">🤖</div>
+                      <div className="copilot-message-text">
+                        <div className="loading-dots">
+                          <span></span>
+                          <span></span>
+                          <span></span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <div ref={messagesEndRef} />
               </div>
             )}
-            <div ref={messagesEndRef} />
-          </div>
-        )}
       </div>
 
       <div className="copilot-input-container">
-          <textarea
+        <textarea
           ref={textareaRef}
           value={inputMessage}
           onChange={(e) => setInputMessage(e.target.value)}

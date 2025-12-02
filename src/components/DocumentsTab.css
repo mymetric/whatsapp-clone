@@ -206,6 +206,15 @@
   color: #1f2937;
 }
 
+/* Estado colapsado: mostra apenas ~3 linhas do texto */
+.document-text-collapsed pre {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-wrap;
+}
+
 .document-toggle-button {
   margin-top: 10px;
   background: transparent;

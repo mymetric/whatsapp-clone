@@ -1,5 +1,7 @@
 import axios from 'axios';
 import { Phone, Message, DocumentRecord, DocumentImage } from '../types';
+// Importar serviço do Firestore REST API
+import { firestoreRestPromptService } from './firestoreRestService';
 
 interface ApiConfig {
   baseUrl: string;
@@ -64,6 +66,16 @@ interface AISuggestion {
   message: string;
   chat_phone: string;
   last_message: string;
+}
+
+// Prompts da IA
+export interface Prompt {
+  id: string;
+  name: string;
+  description?: string;
+  content: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export const phoneService = {
@@ -267,6 +279,63 @@ export const aiSuggestionService = {
   }
 };
 
+// CRUD de prompts (coleção "prompts" no backend/messages - Firestore database "messages")
+const STORAGE_KEY = 'ai_prompts';
+
+export const promptService = {
+  async getPrompts(): Promise<Prompt[]> {
+    // Usar Firestore REST API diretamente com as credenciais do service account
+    try {
+      return await firestoreRestPromptService.getPrompts();
+    } catch (error: any) {
+      console.error('❌ Erro ao carregar prompts do Firestore:', error);
+      // Fallback para localStorage
+      try {
+        const stored = localStorage.getItem(STORAGE_KEY);
+        if (stored) {
+          return JSON.parse(stored);
+        }
+      } catch (storageError) {
+        console.error('Erro ao ler prompts do localStorage:', storageError);
+      }
+      return [];
+    }
+  },
+
+  async createPrompt(data: Omit<Prompt, 'id' | 'createdAt' | 'updatedAt'>): Promise<Prompt> {
+    // Usar Firestore REST API diretamente
+    try {
+      return await firestoreRestPromptService.createPrompt(data);
+    } catch (error: any) {
+      console.error('❌ Erro ao salvar prompt no Firestore:', error);
+      throw new Error(`Erro ao salvar prompt: ${error.message || 'Erro desconhecido'}`);
+    }
+  },
+
+  async updatePrompt(
+    id: string,
+    data: Omit<Prompt, 'id' | 'createdAt' | 'updatedAt'>
+  ): Promise<Prompt> {
+    // Usar Firestore REST API diretamente
+    try {
+      return await firestoreRestPromptService.updatePrompt(id, data);
+    } catch (error: any) {
+      console.error('❌ Erro ao atualizar prompt no Firestore:', error);
+      throw new Error(`Erro ao atualizar prompt: ${error.message || 'Erro desconhecido'}`);
+    }
+  },
+
+  async deletePrompt(id: string): Promise<void> {
+    // Usar Firestore REST API diretamente
+    try {
+      return await firestoreRestPromptService.deletePrompt(id);
+    } catch (error: any) {
+      console.error('❌ Erro ao deletar prompt do Firestore:', error);
+      throw new Error(`Erro ao deletar prompt: ${error.message || 'Erro desconhecido'}`);
+    }
+  }
+};
+
 const DOCUMENTS_BASE_URL = 'https://n8n.rosenbaum.adv.br/webhook/api/documents';
 const EXTERNAL_API_HEADERS = {
   apikey: 'YY2pHUzcGUFKBmZ'
@@ -293,6 +362,7 @@ const parseImagesFromField = (field: any): DocumentImage[] => {
         if (Array.isArray(parsed)) return parsed;
         if (parsed && typeof parsed === 'object') return [parsed];
       } catch {
+        // Quando é apenas uma URL/ID simples, tratamos como um objeto com campo file
         return [{ file: trimmed }];
       }
     }
@@ -302,8 +372,9 @@ const parseImagesFromField = (field: any): DocumentImage[] => {
   const items = normalizeArray(field);
 
   return items
-    .map((item, index) => {
+    .map((item) => {
       if (!item) return null;
+      // Para exibição, priorizamos sempre o campo `file`
       const fileId = item.file || item.fileId || item.id || item.url || item.link;
       if (!fileId) return null;
       return {
@@ -336,12 +407,14 @@ const normalizeDocumentRecord = (
   const images: DocumentImage[] = [
     ...parseImagesFromField(doc.images),
     ...parseImagesFromField(doc.image),
-    ...parseImagesFromField(doc.files)
+    ...parseImagesFromField(doc.files),
+    // Novo formato da API de documentos: usamos apenas o campo processado `file`
+    ...parseImagesFromField(doc.file)
   ];
 
   const metadata: Record<string, any> = {};
 
-  ['sender', 'destination', 'subject', 'email', 'phone'].forEach((key) => {
+  ['sender', 'destination', 'subject', 'email', 'phone', 'timestamp'].forEach((key) => {
     if (doc[key] !== undefined) {
       metadata[key] = doc[key];
     }
@@ -359,7 +432,14 @@ const normalizeDocumentRecord = (
     name: doc.name || doc.subject || doc._name,
     createdAt: doc._createTime || doc.createTime || doc.createdAt,
     updatedAt: doc._updateTime || doc.updateTime || doc.updatedAt,
-    text: typeof doc.text === 'string' ? doc.text : doc.content,
+    text:
+      typeof doc.text === 'string'
+        ? doc.text
+        : typeof doc.content === 'string'
+        ? doc.content
+        : typeof doc.extracted_text === 'string'
+        ? doc.extracted_text
+        : undefined,
     origin,
     direction,
     images,

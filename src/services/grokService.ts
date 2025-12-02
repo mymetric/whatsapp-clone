@@ -61,10 +61,11 @@ class GrokService {
     try {
       const apiKey = await this.loadApiKey();
       
-      // Construir contexto para o Grok
-      // Se um systemPrompt personalizado foi fornecido, use-o como base; caso contrário, use o padrão
-      const baseSystemPrompt = context?.systemPrompt || `Você é um assistente especializado em atendimento ao cliente via WhatsApp. 
+      // Construir system prompt
+      const systemPrompt = context?.systemPrompt || `Você é um assistente especializado em atendimento ao cliente via WhatsApp. 
 Sua função é gerar respostas profissionais, amigáveis e úteis para clientes.
+
+${context?.phoneNumber ? `Cliente: ${context.phoneNumber}` : ''}
 
 Instruções:
 - Seja sempre profissional e prestativo
@@ -72,30 +73,67 @@ Instruções:
 - Responda de forma clara e objetiva
 - Se não souber algo, seja honesto e ofereça alternativas
 - Use emojis moderadamente para tornar a conversa mais amigável
-- Mantenha as respostas concisas mas completas`;
+- Mantenha as respostas concisas mas completas
+- IMPORTANTE: NUNCA gere respostas com mais de 4000 caracteres. Se sua resposta estiver ficando muito longa, resuma os pontos principais de forma concisa.`;
 
-      // Sempre adicionar contexto da conversa, mesmo quando systemPrompt personalizado é fornecido
-      const conversationContext = `
-Contexto da conversa:
-${context?.conversationHistory ? `Histórico: ${context.conversationHistory}` : ''}
-${context?.lastMessage ? `Última mensagem do cliente: ${context.lastMessage}` : ''}
-${context?.phoneNumber ? `Cliente: ${context.phoneNumber}` : ''}`;
-
-      const systemPrompt = baseSystemPrompt + conversationContext;
-
+      // Construir array de mensagens incluindo histórico
       const messages: GrokMessage[] = [
         {
           role: 'system',
           content: systemPrompt
-        },
-        {
-          role: 'user',
-          content: userPrompt
         }
       ];
 
-      console.log('🤖 Enviando prompt para Grok:', userPrompt);
-      console.log('📞 Contexto:', context);
+      // Adicionar histórico de conversa como mensagens
+      if (context?.conversationHistory) {
+        // Parsear o histórico que vem no formato "Você: mensagem\nCliente: mensagem"
+        const historyLines = context.conversationHistory.split('\n').filter(line => line.trim());
+        historyLines.forEach(line => {
+          if (line.startsWith('Você:') || line.match(/^\d+\.\s*\[.*\]\s*Você:/)) {
+            const content = line.replace(/^\d+\.\s*\[.*\]\s*/, '').replace(/^Você:\s*/, '').trim();
+            if (content) {
+              messages.push({
+                role: 'assistant',
+                content: content
+              });
+            }
+          } else if (line.startsWith('Cliente:') || line.match(/^\d+\.\s*\[.*\]\s*Cliente:/)) {
+            const content = line.replace(/^\d+\.\s*\[.*\]\s*/, '').replace(/^Cliente:\s*/, '').trim();
+            if (content) {
+              messages.push({
+                role: 'user',
+                content: content
+              });
+            }
+          }
+        });
+      }
+
+      // Adicionar última mensagem se não estiver no histórico
+      if (context?.lastMessage) {
+        const lastMessageInHistory = context?.conversationHistory?.includes(context.lastMessage);
+        if (!lastMessageInHistory) {
+          messages.push({
+            role: 'user',
+            content: context.lastMessage
+          });
+        }
+      }
+
+      // Adicionar prompt do usuário
+      messages.push({
+        role: 'user',
+        content: userPrompt
+      });
+
+      console.log('🤖 Enviando payload para Grok:');
+      console.log('📝 System Prompt:', systemPrompt.substring(0, 200) + '...');
+      console.log('💬 Total de mensagens:', messages.length);
+      console.log('📞 Contexto:', {
+        hasHistory: !!context?.conversationHistory,
+        hasLastMessage: !!context?.lastMessage,
+        hasSystemPrompt: !!context?.systemPrompt
+      });
 
       const response = await fetch(this.baseUrl, {
         method: 'POST',
@@ -104,7 +142,7 @@ ${context?.phoneNumber ? `Cliente: ${context.phoneNumber}` : ''}`;
           'Authorization': `Bearer ${apiKey}`
         },
         body: JSON.stringify({
-          model: 'grok-3',
+          model: 'grok-4-fast',
           messages: messages,
           max_tokens: context?.systemPrompt ? 40000 : 1000, // Mais tokens para o copiloto
           temperature: 0.7,
@@ -149,7 +187,6 @@ ${context?.phoneNumber ? `Cliente: ${context.phoneNumber}` : ''}`;
       lastMessage?: string;
       phoneNumber?: string;
       conversationHistory?: string;
-      systemPrompt?: string;
     }
   ): Promise<string> {
     const prompt = `O cliente não gostou da sugestão anterior e pediu uma nova resposta.

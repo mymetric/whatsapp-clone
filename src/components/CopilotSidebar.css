@@ -48,6 +48,44 @@
   align-items: center;
 }
 
+.copilot-prompts-toggle {
+  background: rgba(255, 255, 255, 0.3) !important;
+  border: 2px solid rgba(255, 255, 255, 0.5) !important;
+  border-radius: 8px !important;
+  padding: 8px 12px !important;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: white !important;
+  font-weight: 600 !important;
+  transition: background-color 0.2s ease, transform 0.1s ease, color 0.2s ease;
+  min-width: 100px;
+}
+
+.copilot-prompts-toggle svg {
+  width: 14px;
+  height: 14px;
+}
+
+.copilot-prompts-toggle:hover {
+  background: rgba(255, 255, 255, 0.5) !important;
+  border-color: rgba(255, 255, 255, 0.8) !important;
+  transform: translateY(-1px);
+}
+
+.copilot-prompts-toggle.active {
+  background: #f9fafb;
+  color: #4b5563;
+}
+
+.copilot-prompts-container {
+  flex: 1;
+  min-height: 0;
+  padding: 12px;
+  box-sizing: border-box;
+}
+
 .copilot-fullscreen-toggle {
   background: rgba(255, 255, 255, 0.2);
   border: none;

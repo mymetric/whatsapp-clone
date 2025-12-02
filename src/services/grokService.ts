@@ -55,14 +55,13 @@ class GrokService {
       lastMessage?: string;
       phoneNumber?: string;
       conversationHistory?: string;
-      systemPrompt?: string;
     }
   ): Promise<string> {
     try {
       const apiKey = await this.loadApiKey();
       
       // Construir contexto para o Grok
-      const systemPrompt = context?.systemPrompt || `Você é um assistente especializado em atendimento ao cliente via WhatsApp. 
+      const systemPrompt = `Você é um assistente especializado em atendimento ao cliente via WhatsApp. 
 Sua função é gerar respostas profissionais, amigáveis e úteis para clientes.
 
 Contexto da conversa:
@@ -76,8 +75,7 @@ Instruções:
 - Responda de forma clara e objetiva
 - Se não souber algo, seja honesto e ofereça alternativas
 - Use emojis moderadamente para tornar a conversa mais amigável
-- Mantenha as respostas concisas mas completas
-- IMPORTANTE: NUNCA gere respostas com mais de 4000 caracteres. Se sua resposta estiver ficando muito longa, resuma os pontos principais de forma concisa.`;
+- Mantenha as respostas concisas mas completas`;
 
       const messages: GrokMessage[] = [
         {
@@ -102,7 +100,7 @@ Instruções:
         body: JSON.stringify({
           model: 'grok-3',
           messages: messages,
-          max_tokens: context?.systemPrompt ? 40000 : 1000, // Mais tokens para o copiloto
+          max_tokens: 500,
           temperature: 0.7,
           stream: false
         })
@@ -121,14 +119,8 @@ Instruções:
         throw new Error('Nenhuma resposta gerada pelo Grok');
       }
 
-      let generatedText = data.choices[0].message.content;
+      const generatedText = data.choices[0].message.content;
       console.log('📝 Texto gerado:', generatedText);
-
-      // Limitar resposta a 40000 caracteres como segurança (apenas para copiloto)
-      if (context?.systemPrompt && generatedText.length > 40000) {
-        console.warn('⚠️ Resposta excedeu 40000 caracteres, truncando...');
-        generatedText = generatedText.substring(0, 40000).trim() + '...';
-      }
 
       return generatedText.trim();
 

@@ -293,7 +293,6 @@ const parseImagesFromField = (field: any): DocumentImage[] => {
         if (Array.isArray(parsed)) return parsed;
         if (parsed && typeof parsed === 'object') return [parsed];
       } catch {
-        // Quando é apenas uma URL/ID simples, tratamos como um objeto com campo file
         return [{ file: trimmed }];
       }
     }
@@ -303,9 +302,8 @@ const parseImagesFromField = (field: any): DocumentImage[] => {
   const items = normalizeArray(field);
 
   return items
-    .map((item) => {
+    .map((item, index) => {
       if (!item) return null;
-      // Para exibição, priorizamos sempre o campo `file`
       const fileId = item.file || item.fileId || item.id || item.url || item.link;
       if (!fileId) return null;
       return {
@@ -338,14 +336,12 @@ const normalizeDocumentRecord = (
   const images: DocumentImage[] = [
     ...parseImagesFromField(doc.images),
     ...parseImagesFromField(doc.image),
-    ...parseImagesFromField(doc.files),
-    // Novo formato da API de documentos: usamos apenas o campo processado `file`
-    ...parseImagesFromField(doc.file)
+    ...parseImagesFromField(doc.files)
   ];
 
   const metadata: Record<string, any> = {};
 
-  ['sender', 'destination', 'subject', 'email', 'phone', 'timestamp'].forEach((key) => {
+  ['sender', 'destination', 'subject', 'email', 'phone'].forEach((key) => {
     if (doc[key] !== undefined) {
       metadata[key] = doc[key];
     }
@@ -363,14 +359,7 @@ const normalizeDocumentRecord = (
     name: doc.name || doc.subject || doc._name,
     createdAt: doc._createTime || doc.createTime || doc.createdAt,
     updatedAt: doc._updateTime || doc.updateTime || doc.updatedAt,
-    text:
-      typeof doc.text === 'string'
-        ? doc.text
-        : typeof doc.content === 'string'
-        ? doc.content
-        : typeof doc.extracted_text === 'string'
-        ? doc.extracted_text
-        : undefined,
+    text: typeof doc.text === 'string' ? doc.text : doc.content,
     origin,
     direction,
     images,

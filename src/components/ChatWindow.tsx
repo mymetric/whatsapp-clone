@@ -360,8 +360,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone, onMessagesChange
         };
         
         updateMessages(prev => 
-          prev.map(msg => 
-            msg._id === optimisticMessage._id ? finalMessage : msg
+            prev.map(msg => 
+              msg._id === optimisticMessage._id ? finalMessage : msg
           )
         );
         
@@ -472,8 +472,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone, onMessagesChange
         };
         
         updateMessages(prev => 
-          prev.map(msg => 
-            msg._id === optimisticMessage._id ? finalMessage : msg
+            prev.map(msg => 
+              msg._id === optimisticMessage._id ? finalMessage : msg
           )
         );
         
@@ -582,8 +582,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone, onMessagesChange
         };
         
         updateMessages(prev => 
-          prev.map(msg => 
-            msg._id === optimisticMessage._id ? finalMessage : msg
+            prev.map(msg => 
+              msg._id === optimisticMessage._id ? finalMessage : msg
           )
         );
         

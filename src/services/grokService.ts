@@ -62,14 +62,9 @@ class GrokService {
       const apiKey = await this.loadApiKey();
       
       // Construir contexto para o Grok
-      // Se um systemPrompt personalizado foi fornecido, use-o; caso contrário, use o padrão
-      const systemPrompt = context?.systemPrompt || `Você é um assistente especializado em atendimento ao cliente via WhatsApp. 
+      // Se um systemPrompt personalizado foi fornecido, use-o como base; caso contrário, use o padrão
+      const baseSystemPrompt = context?.systemPrompt || `Você é um assistente especializado em atendimento ao cliente via WhatsApp. 
 Sua função é gerar respostas profissionais, amigáveis e úteis para clientes.
-
-Contexto da conversa:
-${context?.conversationHistory ? `Histórico: ${context.conversationHistory}` : ''}
-${context?.lastMessage ? `Última mensagem do cliente: ${context.lastMessage}` : ''}
-${context?.phoneNumber ? `Cliente: ${context.phoneNumber}` : ''}
 
 Instruções:
 - Seja sempre profissional e prestativo
@@ -78,6 +73,15 @@ Instruções:
 - Se não souber algo, seja honesto e ofereça alternativas
 - Use emojis moderadamente para tornar a conversa mais amigável
 - Mantenha as respostas concisas mas completas`;
+
+      // Sempre adicionar contexto da conversa, mesmo quando systemPrompt personalizado é fornecido
+      const conversationContext = `
+Contexto da conversa:
+${context?.conversationHistory ? `Histórico: ${context.conversationHistory}` : ''}
+${context?.lastMessage ? `Última mensagem do cliente: ${context.lastMessage}` : ''}
+${context?.phoneNumber ? `Cliente: ${context.phoneNumber}` : ''}`;
+
+      const systemPrompt = baseSystemPrompt + conversationContext;
 
       const messages: GrokMessage[] = [
         {

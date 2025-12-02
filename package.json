@@ -47,5 +47,8 @@
       "last 1 safari version"
     ]
   },
-  "proxy": "https://n8n.rosenbaum.adv.br"
+  "proxy": "https://n8n.rosenbaum.adv.br",
+  "devDependencies": {
+    "@types/jsrsasign": "^10.5.15"
+  }
 }

@@ -1,5 +1,5 @@
 import { Prompt } from './api';
-import { KJUR, hextob64u } from 'jsrsasign';
+import { KJUR } from 'jsrsasign';
 
 interface ServiceAccount {
   type: string;

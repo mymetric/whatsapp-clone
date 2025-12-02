@@ -1,4 +1,5 @@
 import { Prompt } from './api';
+import { KJUR, hextob64u } from 'jsrsasign';
 
 interface ServiceAccount {
   type: string;
@@ -68,16 +69,8 @@ const getAccessToken = async (serviceAccount: ServiceAccount): Promise<string> =
       scope: 'https://www.googleapis.com/auth/datastore'
     };
 
-    // Codificar header e claim
-    const encodedHeader = base64UrlEncode(JSON.stringify(header));
-    const encodedClaim = base64UrlEncode(JSON.stringify(claim));
-    const unsignedJWT = `${encodedHeader}.${encodedClaim}`;
-
-    // Assinar JWT usando Web Crypto API
-    const privateKey = await importPrivateKey(serviceAccount.private_key);
-    const signature = await signData(unsignedJWT, privateKey);
-    const encodedSignature = arrayBufferToBase64Url(signature);
-    const signedJWT = `${unsignedJWT}.${encodedSignature}`;
+    // Assinar JWT usando jsrsasign (funciona em HTTP e HTTPS)
+    const signedJWT = signJWT(header, claim, serviceAccount.private_key);
 
     // Trocar JWT por access token
     const response = await fetch(serviceAccount.token_uri, {
@@ -111,70 +104,21 @@ const getAccessToken = async (serviceAccount: ServiceAccount): Promise<string> =
   }
 };
 
-// Base64 URL encode
-const base64UrlEncode = (str: string): string => {
-  const utf8Bytes = new TextEncoder().encode(str);
-  let binary = '';
-  for (let i = 0; i < utf8Bytes.length; i++) {
-    binary += String.fromCharCode(utf8Bytes[i]);
+// Assinar JWT usando jsrsasign (funciona em qualquer contexto, incluindo HTTP)
+const signJWT = (header: any, payload: any, privateKey: string): string => {
+  try {
+    // Criar JWT usando jsrsasign
+    const sHeader = JSON.stringify(header);
+    const sPayload = JSON.stringify(payload);
+    
+    // Assinar JWT
+    const sJWT = KJUR.jws.JWS.sign('RS256', sHeader, sPayload, privateKey);
+    
+    return sJWT;
+  } catch (error) {
+    console.error('Erro ao assinar JWT:', error);
+    throw new Error('Falha ao assinar JWT');
   }
-  return btoa(binary)
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=/g, '');
-};
-
-// Importar chave privada PEM para formato Web Crypto
-const importPrivateKey = async (pemKey: string): Promise<CryptoKey> => {
-  // Remover headers e quebras de linha
-  const pemHeader = '-----BEGIN PRIVATE KEY-----';
-  const pemFooter = '-----END PRIVATE KEY-----';
-  const pemContents = pemKey
-    .replace(pemHeader, '')
-    .replace(pemFooter, '')
-    .replace(/\s/g, '');
-  
-  // Converter de base64 para ArrayBuffer
-  const binaryDer = Uint8Array.from(atob(pemContents), c => c.charCodeAt(0));
-  
-  // Importar chave usando Web Crypto API
-  return await crypto.subtle.importKey(
-    'pkcs8',
-    binaryDer.buffer,
-    {
-      name: 'RSASSA-PKCS1-v1_5',
-      hash: 'SHA-256',
-    },
-    false,
-    ['sign']
-  );
-};
-
-// Assinar dados
-const signData = async (data: string, key: CryptoKey): Promise<ArrayBuffer> => {
-  const encoder = new TextEncoder();
-  const dataBuffer = encoder.encode(data);
-  return await crypto.subtle.sign(
-    {
-      name: 'RSASSA-PKCS1-v1_5',
-      hash: 'SHA-256',
-    },
-    key,
-    dataBuffer
-  );
-};
-
-// Converter ArrayBuffer para base64 URL
-const arrayBufferToBase64Url = (buffer: ArrayBuffer): string => {
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary)
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=/g, '');
 };
 
 // Fazer requisição ao Firestore REST API

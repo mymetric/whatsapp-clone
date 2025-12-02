@@ -106,7 +106,7 @@ ${context?.phoneNumber ? `Cliente: ${context.phoneNumber}` : ''}`;
         body: JSON.stringify({
           model: 'grok-3',
           messages: messages,
-          max_tokens: 500,
+          max_tokens: context?.systemPrompt ? 40000 : 1000, // Mais tokens para o copiloto
           temperature: 0.7,
           stream: false
         })
@@ -125,8 +125,14 @@ ${context?.phoneNumber ? `Cliente: ${context.phoneNumber}` : ''}`;
         throw new Error('Nenhuma resposta gerada pelo Grok');
       }
 
-      const generatedText = data.choices[0].message.content;
+      let generatedText = data.choices[0].message.content;
       console.log('📝 Texto gerado:', generatedText);
+
+      // Limitar resposta a 40000 caracteres como segurança (apenas para copiloto)
+      if (context?.systemPrompt && generatedText.length > 40000) {
+        console.warn('⚠️ Resposta excedeu 40000 caracteres, truncando...');
+        generatedText = generatedText.substring(0, 40000).trim() + '...';
+      }
 
       return generatedText.trim();
 

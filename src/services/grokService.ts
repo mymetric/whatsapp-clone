@@ -55,13 +55,15 @@ class GrokService {
       lastMessage?: string;
       phoneNumber?: string;
       conversationHistory?: string;
+      systemPrompt?: string;
     }
   ): Promise<string> {
     try {
       const apiKey = await this.loadApiKey();
       
       // Construir contexto para o Grok
-      const systemPrompt = `Você é um assistente especializado em atendimento ao cliente via WhatsApp. 
+      // Se um systemPrompt personalizado foi fornecido, use-o; caso contrário, use o padrão
+      const systemPrompt = context?.systemPrompt || `Você é um assistente especializado em atendimento ao cliente via WhatsApp. 
 Sua função é gerar respostas profissionais, amigáveis e úteis para clientes.
 
 Contexto da conversa:
@@ -137,6 +139,7 @@ Instruções:
       lastMessage?: string;
       phoneNumber?: string;
       conversationHistory?: string;
+      systemPrompt?: string;
     }
   ): Promise<string> {
     const prompt = `O cliente não gostou da sugestão anterior e pediu uma nova resposta.

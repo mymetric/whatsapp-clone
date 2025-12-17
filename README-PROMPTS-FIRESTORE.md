@@ -120,3 +120,5 @@ Após configurar o backend:
 - **Network Error**: Backend não está acessível ou CORS não configurado
 - **403 Forbidden**: Regras do Firestore não permitem a operação
 
+
+

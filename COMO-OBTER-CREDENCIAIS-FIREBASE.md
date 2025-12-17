@@ -76,3 +76,5 @@ service cloud.firestore {
 
 Aplique essas regras tanto no database default quanto no database "messages" (se estiver usando o backend).
 
+
+

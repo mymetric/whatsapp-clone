@@ -6,6 +6,7 @@ import CopilotSidebar from './components/CopilotSidebar';
 import Login from './components/Login';
 import Header from './components/Header';
 import PromptsManager from './components/PromptsManager';
+import ContenciosoTab from './components/ContenciosoTab';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { Phone, Message } from './types';
 import { phoneService } from './services/api';
@@ -19,6 +20,7 @@ const AppContent: React.FC = () => {
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showPromptsPage, setShowPromptsPage] = useState(false);
+  const [showContenciosoPage, setShowContenciosoPage] = useState(false);
   const { isAuthenticated } = useAuth();
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const lastActivityRef = useRef<Date>(new Date());
@@ -143,7 +145,13 @@ const AppContent: React.FC = () => {
   if (showPromptsPage) {
     return (
       <div className="app fade-in">
-        <Header onPromptsClick={() => setShowPromptsPage(false)} />
+        <Header
+          onPromptsClick={() => setShowPromptsPage(false)}
+          onContenciosoClick={() => {
+            setShowPromptsPage(false);
+            setShowContenciosoPage(true);
+          }}
+        />
         <div className="prompts-page-container">
           <PromptsManager onClose={() => setShowPromptsPage(false)} />
         </div>
@@ -151,9 +159,26 @@ const AppContent: React.FC = () => {
     );
   }
 
+  if (showContenciosoPage) {
+    return (
+      <div className="app fade-in">
+        <Header
+          onPromptsClick={() => setShowPromptsPage(true)}
+          onContenciosoClick={() => setShowContenciosoPage(false)}
+        />
+        <div className="prompts-page-container">
+          <ContenciosoTab />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app fade-in">
-      <Header onPromptsClick={() => setShowPromptsPage(true)} />
+      <Header
+        onPromptsClick={() => setShowPromptsPage(true)}
+        onContenciosoClick={() => setShowContenciosoPage(true)}
+      />
       <div className="app-main">
         <ChatList
           phones={phones}

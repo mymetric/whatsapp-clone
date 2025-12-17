@@ -9,6 +9,34 @@ interface MondayUpdate {
   } | null;
 }
 
+// Tipos para itens genéricos de board (ex: contencioso)
+interface MondayColumnValue {
+  id: string;
+  text: string;
+  type?: string;
+}
+
+interface MondayBoardItem {
+  id: string;
+  name: string;
+  created_at?: string;
+  column_values: MondayColumnValue[];
+}
+
+interface MondayBoard {
+  id: string;
+  name: string;
+  items_page: {
+    items: MondayBoardItem[];
+  };
+}
+
+interface MondayBoardResponse {
+  data: {
+    boards: MondayBoard[];
+  };
+}
+
 interface MondayItem {
   id: string;
   name: string;
@@ -96,6 +124,50 @@ class MondayService {
     } catch (error) {
       console.error('❌ Erro ao buscar dados do Monday:', error);
       return null;
+    }
+  }
+
+  /**
+   * Busca itens de um board específico do Monday (ex: board de contencioso)
+   * via backend local (server/server.js), evitando CORS e exposição da API key.
+   */
+  async getBoardItems(boardId: number | string): Promise<MondayBoardItem[]> {
+    try {
+      // Chamada para o backend local (Express) em /api/contencioso,
+      // que por sua vez fala com a API do Monday.
+      const url = `/api/contencioso?boardId=${boardId}`;
+
+      console.log('📄 Monday: Buscando itens do board via backend local', boardId, url);
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        console.error('❌ Erro HTTP ao buscar board do Monday:', response.status, response.statusText);
+        return [];
+      }
+
+      const data = await response.json();
+      console.log('✅ Monday: Resposta do board recebida do backend local:', data);
+
+      // Backend já retorna um array de itens no formato esperado
+      if (Array.isArray(data)) {
+        return data as MondayBoardItem[];
+      }
+
+      if (data && Array.isArray(data.items)) {
+        return data.items as MondayBoardItem[];
+      }
+
+      console.warn('⚠️ Monday: Formato de resposta inesperado para itens do board (backend local)');
+      return [];
+    } catch (error) {
+      console.error('❌ Erro ao buscar itens do board do Monday:', error);
+      return [];
     }
   }
 

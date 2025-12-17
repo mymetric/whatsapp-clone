@@ -4,9 +4,10 @@ import './Header.css';
 
 interface HeaderProps {
   onPromptsClick?: () => void;
+  onContenciosoClick?: () => void;
 }
 
-const Header: React.FC<HeaderProps> = ({ onPromptsClick }) => {
+const Header: React.FC<HeaderProps> = ({ onPromptsClick, onContenciosoClick }) => {
   const { user, logout } = useAuth();
 
   if (!user) return null;
@@ -28,8 +29,24 @@ const Header: React.FC<HeaderProps> = ({ onPromptsClick }) => {
           </div>
         </div>
         <div className="header-right">
+          {onContenciosoClick && (
+            <button
+              onClick={onContenciosoClick}
+              className="header-prompts-button"
+              title="Ver board de contencioso"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 1L3 5v6c0 5.25 3.75 10.74 9 12 5.25-1.26 9-6.75 9-12V5l-9-4zm0 2.18L18.09 6 12 9.82 5.91 6 12 3.18zM5 8.09l7 4.13 7-4.13V11c0 4.09-2.91 8.53-7 9.93C7.91 19.53 5 15.09 5 11V8.09z" />
+              </svg>
+              <span>Contencioso</span>
+            </button>
+          )}
           {onPromptsClick && (
-            <button onClick={onPromptsClick} className="header-prompts-button" title="Gerenciar prompts da IA">
+            <button
+              onClick={onPromptsClick}
+              className="header-prompts-button"
+              title="Gerenciar prompts da IA"
+            >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M3 5h18v2H3V5zm4 6h14v2H7v-2zm-4 6h18v2H3v-2z" />
               </svg>

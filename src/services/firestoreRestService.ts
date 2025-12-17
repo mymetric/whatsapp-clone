@@ -28,6 +28,16 @@ interface CredentialsData {
 let accessToken: string | null = null;
 let tokenExpiry: number = 0;
 
+// Tipo básico para anexos de processo. Ajuste os campos conforme a estrutura real dos documentos.
+export interface Attachment {
+  id: string;
+  lawsuitId: string;
+  file_url?: string;
+  attachment_name?: string;
+  // Campos adicionais permanecem abertos
+  [key: string]: any;
+}
+
 // Carregar credenciais do Firebase
 const loadFirebaseCredentials = async (): Promise<ServiceAccount> => {
   try {
@@ -121,7 +131,7 @@ const signJWT = (header: any, payload: any, privateKey: string): string => {
   }
 };
 
-// Fazer requisição ao Firestore REST API
+// Fazer requisição ao Firestore REST API (endpoint documents)
 const firestoreRequest = async (method: string, path: string, body?: any): Promise<any> => {
   const serviceAccount = await loadFirebaseCredentials();
   const projectId = serviceAccount.project_id;
@@ -153,6 +163,32 @@ const firestoreRequest = async (method: string, path: string, body?: any): Promi
   }
   
   return await response.json();
+};
+
+// Endpoint genérico de consultas (runQuery) no Firestore
+const firestoreRunQuery = async (structuredQuery: any): Promise<any[]> => {
+  const serviceAccount = await loadFirebaseCredentials();
+  const projectId = serviceAccount.project_id;
+  const token = await getAccessToken(serviceAccount);
+
+  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/messages/documents:runQuery`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ structuredQuery })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Firestore runQuery error: ${response.status} ${response.statusText} - ${errorText}`);
+  }
+
+  const data = await response.json();
+  return Array.isArray(data) ? data : [];
 };
 
 // Converter documento do Firestore para Prompt
@@ -262,6 +298,59 @@ export const firestoreRestPromptService = {
       console.error('❌ Erro ao deletar prompt do Firestore:', error);
       throw error;
     }
+  }
+};
+
+// Converter documento do Firestore para Attachment
+const firestoreDocToAttachment = (doc: any): Attachment => {
+  const fields = doc.fields || {};
+  const docId = doc.name.split('/').pop() || '';
+
+  return {
+    id: docId,
+    lawsuitId: fields.lawsuit_id?.stringValue || '',
+    // Mantém todos os campos originais disponíveis
+    ...Object.keys(fields).reduce((acc: any, key: string) => {
+      const value = fields[key];
+      if ('stringValue' in value) acc[key] = value.stringValue;
+      else if ('integerValue' in value) acc[key] = Number(value.integerValue);
+      else if ('booleanValue' in value) acc[key] = value.booleanValue;
+      else if ('doubleValue' in value) acc[key] = value.doubleValue;
+      else acc[key] = value;
+      return acc;
+    }, {})
+  };
+};
+
+// Serviço para anexos (coleção attachments no database messages)
+export const firestoreRestAttachmentService = {
+  // Buscar anexos de um processo pelo campo lawsuit_id
+  async getAttachmentsByLawsuitId(lawsuitId: string): Promise<Attachment[]> {
+    if (!lawsuitId) {
+      return [];
+    }
+
+    const structuredQuery = {
+      from: [{ collectionId: 'attachments' }],
+      where: {
+        fieldFilter: {
+          field: { fieldPath: 'lawsuit_id' },
+          op: 'EQUAL',
+          value: { stringValue: lawsuitId }
+        }
+      }
+    };
+
+    const results = await firestoreRunQuery(structuredQuery);
+
+    const attachments: Attachment[] = [];
+    for (const row of results) {
+      if (row.document) {
+        attachments.push(firestoreDocToAttachment(row.document));
+      }
+    }
+
+    return attachments;
   }
 };
 

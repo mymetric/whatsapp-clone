@@ -41,12 +41,40 @@ app.get('/api/contencioso', async (req, res) => {
     return res.status(500).json({ error: 'Monday API key não configurada no credentials.json' });
   }
 
-  const query = `
-    query ($boardId: [ID!]) {
+  const PAGE_LIMIT = 500;
+
+  // Monday: `items_page` é paginado via `cursor`.
+  // 1) Primeira página: items_page(limit: 500)
+  // 2) Próximas: items_page(limit: 500, cursor: "...")
+  const firstPageQuery = `
+    query ($boardId: [ID!], $limit: Int!) {
       boards (ids: $boardId) {
         id
         name
-        items_page (limit: 500) {
+        items_page (limit: $limit) {
+          cursor
+          items {
+            id
+            name
+            created_at
+            column_values {
+              id
+              text
+              type
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  const nextPageQuery = `
+    query ($boardId: [ID!], $limit: Int!, $cursor: String!) {
+      boards (ids: $boardId) {
+        id
+        name
+        items_page (limit: $limit, cursor: $cursor) {
+          cursor
           items {
             id
             name
@@ -63,43 +91,68 @@ app.get('/api/contencioso', async (req, res) => {
   `;
 
   try {
-    console.log('📄 [server] Buscando itens do board no Monday:', boardId);
+    console.log('📄 [server] Buscando itens do board no Monday (com paginação):', boardId);
 
-    const response = await axios.post(
-      'https://api.monday.com/v2',
-      {
-        query,
-        variables: { boardId },
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: apiKey,
+    const allItems = [];
+    const seenIds = new Set();
+    let cursor = null;
+    let page = 0;
+    const MAX_PAGES = 200; // safety guard (200 * 500 = 100k itens)
+
+    while (page < MAX_PAGES) {
+      page += 1;
+
+      const query = cursor ? nextPageQuery : firstPageQuery;
+      const variables = cursor
+        ? { boardId: [String(boardId)], limit: PAGE_LIMIT, cursor }
+        : { boardId: [String(boardId)], limit: PAGE_LIMIT };
+
+      console.log(
+        `📄 [server] Página ${page} (limit=${PAGE_LIMIT})` + (cursor ? ' (cursor presente)' : ''),
+      );
+
+      const response = await axios.post(
+        'https://api.monday.com/v2',
+        { query, variables },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: apiKey,
+          },
         },
+      );
+
+      const data = response.data;
+
+      if (data?.errors?.length) {
+        console.error('❌ [server] Monday GraphQL errors:', JSON.stringify(data.errors, null, 2));
+        return res.status(502).json({ error: 'Erro do Monday GraphQL', details: data.errors });
       }
-    );
 
-    const data = response.data;
-    console.log('✅ [server] Resposta bruta do Monday:', JSON.stringify(data, null, 2));
+      const boards = data?.data?.boards;
+      if (!Array.isArray(boards) || boards.length === 0) {
+        return res.json([]);
+      }
 
-    if (
-      !data ||
-      !data.data ||
-      !Array.isArray(data.data.boards) ||
-      data.data.boards.length === 0
-    ) {
-      return res.json([]);
+      const board = boards[0];
+      const pageObj = board?.items_page;
+      const items = Array.isArray(pageObj?.items) ? pageObj.items : [];
+
+      for (const item of items) {
+        if (!item || !item.id) continue;
+        if (seenIds.has(item.id)) continue;
+        seenIds.add(item.id);
+        allItems.push(item);
+      }
+
+      cursor = pageObj?.cursor || null;
+
+      // Se não houver cursor, acabou.
+      if (!cursor) break;
     }
 
-    const board = data.data.boards[0];
-    const items =
-      board.items_page &&
-      Array.isArray(board.items_page.items)
-        ? board.items_page.items
-        : [];
-
-    // Já devolvemos no formato que o front espera
-    return res.json(items);
+    console.log(`✅ [server] Total de itens retornados: ${allItems.length}`);
+    return res.json(allItems);
   } catch (err) {
     console.error('❌ [server] Erro ao chamar API do Monday:', err.response?.data || err.message);
     const status = err.response?.status || 500;

@@ -4,7 +4,7 @@ interface GrokConfig {
 
 interface GrokMessage {
   role: 'user' | 'assistant' | 'system';
-  content: string;
+  content: any;
 }
 
 interface GrokResponse {
@@ -176,6 +176,115 @@ Instruções:
 
     } catch (error) {
       console.error('❌ Erro ao gerar resposta com Grok:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Envia texto + arquivos para o Grok usando o formato multimodal (quando suportado).
+   * Observação: alguns tipos podem não ser aceitos pelo modelo/endpoint; nesse caso, a chamada pode falhar.
+   */
+  async generateResponseWithFiles(
+    userPrompt: string,
+    files: Array<{
+      filename: string;
+      mimeType: string;
+      base64: string; // sem prefixo data:
+    }>,
+    context?: {
+      lastMessage?: string;
+      phoneNumber?: string;
+      conversationHistory?: string;
+      systemPrompt?: string;
+    },
+  ): Promise<string> {
+    try {
+      const apiKey = await this.loadApiKey();
+
+      const systemPrompt = context?.systemPrompt || `Você é um assistente especializado.`;
+
+      const messages: GrokMessage[] = [
+        { role: 'system', content: systemPrompt },
+      ];
+
+      if (context?.conversationHistory) {
+        const historyLines = context.conversationHistory.split('\n').filter((line) => line.trim());
+        historyLines.forEach((line) => {
+          if (line.startsWith('Você:') || line.match(/^\d+\.\s*\[.*\]\s*Você:/)) {
+            const content = line
+              .replace(/^\d+\.\s*\[.*\]\s*/, '')
+              .replace(/^Você:\s*/, '')
+              .trim();
+            if (content) messages.push({ role: 'assistant', content });
+          } else if (line.startsWith('Cliente:') || line.match(/^\d+\.\s*\[.*\]\s*Cliente:/)) {
+            const content = line
+              .replace(/^\d+\.\s*\[.*\]\s*/, '')
+              .replace(/^Cliente:\s*/, '')
+              .trim();
+            if (content) messages.push({ role: 'user', content });
+          }
+        });
+      }
+
+      if (context?.lastMessage) {
+        const lastMessageInHistory = context?.conversationHistory?.includes(context.lastMessage);
+        if (!lastMessageInHistory) {
+          messages.push({ role: 'user', content: context.lastMessage });
+        }
+      }
+
+      const userContentParts: any[] = [
+        { type: 'text', text: userPrompt },
+      ];
+
+      // Tenta mandar arquivos como "input_file" (estilo OpenAI). Se a API não suportar, retornará erro.
+      files.forEach((f) => {
+        userContentParts.push({
+          type: 'input_file',
+          filename: f.filename,
+          mime_type: f.mimeType,
+          file_data: f.base64,
+        });
+      });
+
+      messages.push({ role: 'user', content: userContentParts });
+
+      const response = await fetch(this.baseUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: 'grok-4-fast',
+          messages,
+          max_tokens: 40000,
+          temperature: 0.7,
+          stream: false,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('❌ Erro na resposta do Grok (com arquivos):', response.status, errorText);
+        throw new Error(`Erro na API do Grok (arquivos): ${response.status} - ${errorText}`);
+      }
+
+      const data: GrokResponse = await response.json();
+      if (!data.choices || data.choices.length === 0) {
+        throw new Error('Nenhuma resposta gerada pelo Grok');
+      }
+
+      let generatedText = data.choices[0].message.content;
+      if (typeof generatedText !== 'string') generatedText = String(generatedText ?? '');
+
+      if (generatedText.length > 40000) {
+        generatedText = generatedText.substring(0, 40000).trim() + '...';
+      }
+
+      return generatedText.trim();
+    } catch (error) {
+      console.error('❌ Erro ao gerar resposta com Grok (arquivos):', error);
       throw error;
     }
   }

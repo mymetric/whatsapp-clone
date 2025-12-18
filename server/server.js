@@ -9,6 +9,56 @@ const PORT = process.env.PORT || 4000;
 // Middleware para JSON
 app.use(express.json());
 
+// Proxy simples para baixar anexos (evita CORS no browser).
+// IMPORTANTE: restringe hosts para reduzir risco de SSRF.
+const ALLOWED_PROXY_HOSTS = new Set([
+  'firebasestorage.googleapis.com',
+  'storage.googleapis.com',
+  'drive.google.com',
+  'docs.google.com',
+]);
+
+app.get('/api/proxy-file', async (req, res) => {
+  try {
+    const rawUrl = String(req.query.url || '');
+    if (!rawUrl) {
+      return res.status(400).json({ error: 'Parâmetro url é obrigatório' });
+    }
+
+    let parsed;
+    try {
+      parsed = new URL(rawUrl);
+    } catch {
+      return res.status(400).json({ error: 'URL inválida' });
+    }
+
+    if (parsed.protocol !== 'https:') {
+      return res.status(400).json({ error: 'Apenas URLs https são permitidas' });
+    }
+
+    if (!ALLOWED_PROXY_HOSTS.has(parsed.hostname)) {
+      return res.status(403).json({ error: `Host não permitido: ${parsed.hostname}` });
+    }
+
+    const upstream = await axios.get(rawUrl, { responseType: 'arraybuffer' });
+    const contentType = upstream.headers?.['content-type'] || 'application/octet-stream';
+    const contentLength = upstream.headers?.['content-length'];
+
+    res.setHeader('Content-Type', contentType);
+    if (contentLength) res.setHeader('Content-Length', contentLength);
+    // Não forçar download; a UI decide (aqui é só para consumo interno).
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    return res.status(200).send(Buffer.from(upstream.data));
+  } catch (err) {
+    console.error('❌ [server] Erro no proxy de arquivo:', err.response?.data || err.message);
+    const status = err.response?.status || 500;
+    return res.status(status).json({
+      error: 'Erro ao baixar arquivo',
+      details: err.response?.data || err.message,
+    });
+  }
+});
+
 // Caminho para o credentials.json na raiz do projeto
 const credentialsPath = path.join(__dirname, '..', 'credentials.json');
 

@@ -187,6 +187,61 @@ ${anexosDescricao}
 Use esse contexto para responder perguntas sobre o processo, andamentos e riscos. Se faltar informação nos anexos, seja claro sobre as limitações.`;
   };
 
+  const inferFilename = (att: Attachment): string => {
+    if (att.attachment_name && att.attachment_name.trim()) return att.attachment_name.trim();
+    if (att.file_url) {
+      try {
+        const u = new URL(att.file_url);
+        const last = u.pathname.split('/').filter(Boolean).pop();
+        if (last) return decodeURIComponent(last);
+      } catch {
+        // ignore
+      }
+    }
+    return `${att.id}.bin`;
+  };
+
+  const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
+    let binary = '';
+    const bytes = new Uint8Array(buffer);
+    // Evita spread em Uint8Array (compatibilidade com target antigo do TS/CRA)
+    for (let i = 0; i < bytes.length; i += 1) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+  };
+
+  const downloadAttachmentForGrok = async (att: Attachment) => {
+    if (!att.file_url) {
+      throw new Error(`Anexo sem URL: ${att.attachment_name || att.id}`);
+    }
+
+    // Usa proxy do backend para evitar CORS
+    const proxyUrl = `/api/proxy-file?url=${encodeURIComponent(att.file_url)}`;
+    const resp = await fetch(proxyUrl);
+    if (!resp.ok) {
+      const txt = await resp.text();
+      throw new Error(`Falha ao baixar anexo (${resp.status}): ${txt}`);
+    }
+
+    const mimeType = resp.headers.get('content-type') || 'application/octet-stream';
+    const buf = await resp.arrayBuffer();
+
+    // Limite simples pra evitar explodir payload
+    const MAX_BYTES = 8 * 1024 * 1024; // 8MB por anexo
+    if (buf.byteLength > MAX_BYTES) {
+      throw new Error(
+        `Anexo muito grande (${Math.round(buf.byteLength / 1024 / 1024)}MB): ${inferFilename(att)} (limite 8MB)`,
+      );
+    }
+
+    return {
+      filename: inferFilename(att),
+      mimeType,
+      base64: arrayBufferToBase64(buf),
+    };
+  };
+
   const handleSendCopilotMessage = async () => {
     if (!copilotInput.trim() || copilotLoading) return;
     const question = copilotInput.trim();
@@ -209,13 +264,41 @@ de forma clara, objetiva e com foco prático para advogados.`;
         .map((m) => `${m.role === 'user' ? 'Usuário' : 'Assistente'}: ${m.content}`)
         .join('\n');
 
-      const answer = await grokService.generateResponse(
-        `Contexto do processo e anexos:\n${context}\n\nPergunta do usuário: ${question}`,
-        {
+      const prompt = `Contexto do processo e anexos:\n${context}\n\nPergunta do usuário: ${question}`;
+
+      // Se houver anexos selecionados, baixa e envia como arquivos para o Grok.
+      let answer: string;
+      if (copilotAttachments.length > 0) {
+        try {
+          const files = await Promise.all(copilotAttachments.map(downloadAttachmentForGrok));
+          answer = await grokService.generateResponseWithFiles(prompt, files, {
+            systemPrompt,
+            conversationHistory: history,
+          });
+        } catch (fileErr) {
+          console.error('Falha ao enviar anexos para o Grok; tentando fallback sem arquivos:', fileErr);
+
+          const anexosFallback = copilotAttachments
+            .map(
+              (att, idx) =>
+                `${idx + 1}. ${inferFilename(att)}${att.file_url ? ` (URL: ${att.file_url})` : ''}`,
+            )
+            .join('\n');
+
+          answer = await grokService.generateResponse(
+            `${prompt}\n\nObservação: não foi possível enviar os arquivos anexados diretamente. Seguem os anexos/links:\n${anexosFallback}`,
+            {
+              systemPrompt,
+              conversationHistory: history,
+            },
+          );
+        }
+      } else {
+        answer = await grokService.generateResponse(prompt, {
           systemPrompt,
           conversationHistory: history,
-        },
-      );
+        });
+      }
 
       const assistantMsg = {
         role: 'assistant' as const,

@@ -354,3 +354,84 @@ export const firestoreRestAttachmentService = {
   }
 };
 
+// Serviço para gerenciar prompts de contencioso (coleção contencioso_prompts no database messages)
+export const firestoreRestContenciosoPromptService = {
+  async getPrompts(): Promise<Prompt[]> {
+    try {
+      const data = await firestoreRequest('GET', 'contencioso_prompts');
+      
+      const prompts: Prompt[] = [];
+      if (data.documents) {
+        data.documents.forEach((doc: any) => {
+          prompts.push(firestoreDocToPrompt(doc));
+        });
+      }
+      
+      console.log('✅ Prompts de contencioso carregados do Firestore (database: messages):', prompts);
+      return prompts;
+    } catch (error) {
+      console.error('❌ Erro ao carregar prompts de contencioso do Firestore:', error);
+      throw error;
+    }
+  },
+
+  async createPrompt(data: Omit<Prompt, 'id' | 'createdAt' | 'updatedAt'>): Promise<Prompt> {
+    try {
+      const docData = promptToFirestoreDoc(data);
+      const response = await firestoreRequest('POST', 'contencioso_prompts', docData);
+      
+      const newPrompt = firestoreDocToPrompt(response);
+      console.log('✅ Prompt de contencioso criado no Firestore (database: messages):', newPrompt);
+      return newPrompt;
+    } catch (error) {
+      console.error('❌ Erro ao criar prompt de contencioso no Firestore:', error);
+      throw error;
+    }
+  },
+
+  async updatePrompt(id: string, data: Omit<Prompt, 'id' | 'createdAt' | 'updatedAt'>): Promise<Prompt> {
+    try {
+      const docData = promptToFirestoreDoc(data);
+      docData.fields.updatedAt = { stringValue: new Date().toISOString() };
+      
+      const serviceAccount = await loadFirebaseCredentials();
+      const projectId = serviceAccount.project_id;
+      const token = await getAccessToken(serviceAccount);
+      
+      const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/messages/documents/contencioso_prompts/${id}?updateMask.fieldPaths=name&updateMask.fieldPaths=description&updateMask.fieldPaths=content&updateMask.fieldPaths=updatedAt`;
+      
+      const response = await fetch(url, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(docData)
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Firestore API error: ${response.status} ${response.statusText} - ${errorText}`);
+      }
+      
+      const result = await response.json();
+      const updatedPrompt = firestoreDocToPrompt(result);
+      console.log('✅ Prompt de contencioso atualizado no Firestore (database: messages):', updatedPrompt);
+      return updatedPrompt;
+    } catch (error) {
+      console.error('❌ Erro ao atualizar prompt de contencioso no Firestore:', error);
+      throw error;
+    }
+  },
+
+  async deletePrompt(id: string): Promise<void> {
+    try {
+      await firestoreRequest('DELETE', `contencioso_prompts/${id}`);
+      console.log('✅ Prompt de contencioso deletado do Firestore (database: messages)');
+    } catch (error) {
+      console.error('❌ Erro ao deletar prompt de contencioso do Firestore:', error);
+      throw error;
+    }
+  }
+};
+

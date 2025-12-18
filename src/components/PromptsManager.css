@@ -156,6 +156,26 @@
   text-overflow: ellipsis;
 }
 
+.prompt-select-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #9ca3af;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.prompt-select-btn:hover {
+  background-color: #d1fae5;
+  color: #059669;
+}
+
 .prompt-delete-btn {
   background: transparent;
   border: none;

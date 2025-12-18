@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { mondayService } from '../services/mondayService';
 import { firestoreRestAttachmentService, Attachment } from '../services/firestoreRestService';
-import { grokService } from '../services/grokService';
+import { Prompt } from '../services/api';
+import ContenciosoPromptsManager from './ContenciosoPromptsManager';
 import './MondayTab.css';
 
 interface ContenciosoItem {
@@ -36,6 +37,8 @@ const ContenciosoTab: React.FC = () => {
   const [copilotInput, setCopilotInput] = useState('');
   const [copilotLoading, setCopilotLoading] = useState(false);
   const [copilotError, setCopilotError] = useState<string | null>(null);
+  const [showPromptsManager, setShowPromptsManager] = useState(false);
+  const [selectedPrompt, setSelectedPrompt] = useState<Prompt | null>(null);
 
   const loadItems = async () => {
     setLoading(true);
@@ -198,24 +201,33 @@ Use esse contexto para responder perguntas sobre o processo, andamentos e riscos
     setCopilotLoading(true);
 
     try {
-      const systemPrompt = `Você é um copiloto jurídico especializado em processos de contencioso.
-Analise o contexto abaixo (número do processo, item do Monday e anexos) e responda em português,
-de forma clara, objetiva e com foco prático para advogados.`;
+      const attachmentsPayload = copilotAttachments.map((att) => ({
+        attachment_name: att.attachment_name,
+        file_url: att.file_url,
+        id: att.id,
+      }));
 
-      const context = buildCopilotContext();
-
-      const history = copilotMessages
-        .slice(-10)
-        .map((m) => `${m.role === 'user' ? 'Usuário' : 'Assistente'}: ${m.content}`)
-        .join('\n');
-
-      const answer = await grokService.generateResponse(
-        `Contexto do processo e anexos:\n${context}\n\nPergunta do usuário: ${question}`,
-        {
-          systemPrompt,
-          conversationHistory: history,
+      const response = await fetch('/api/grok/contencioso', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
         },
-      );
+        body: JSON.stringify({
+          question,
+          numeroProcesso: selectedNumeroProcesso,
+          itemName: selectedItem?.name,
+          attachments: attachmentsPayload,
+          promptId: selectedPrompt?.id || null,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HTTP ${response.status}: ${errorText}`);
+      }
+
+      const data = await response.json();
+      const answer = data.answer || '';
 
       const assistantMsg = {
         role: 'assistant' as const,
@@ -363,11 +375,21 @@ de forma clara, objetiva e com foco prático para advogados.`;
             onChange={(e) => setSearchTerm(e.target.value)}
           />
         </div>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <button
+            onClick={() => setShowPromptsManager(true)}
+            className="refresh-button"
+            title="Gerenciar prompts de contencioso"
+            style={{ padding: '8px 12px', fontSize: 13 }}
+          >
+            📝 Prompts
+          </button>
         <button onClick={loadItems} className="refresh-button" title="Atualizar dados">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
             <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
           </svg>
         </button>
+        </div>
       </div>
 
       <div className="monday-content">
@@ -562,7 +584,26 @@ de forma clara, objetiva e com foco prático para advogados.`;
                     </div>
                   )}
 
+                  {selectedPrompt && (
+                    <div className="contencioso-copilot-selected-prompt">
+                      <span>Prompt ativo: <strong>{selectedPrompt.name}</strong></span>
+                      <button
+                        onClick={() => setSelectedPrompt(null)}
+                        className="contencioso-copilot-remove-btn"
+                        title="Remover prompt"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  )}
                   <div className="contencioso-copilot-input-row">
+                    <button
+                      className="contencioso-copilot-prompt-btn"
+                      onClick={() => setShowPromptsManager(true)}
+                      title="Selecionar prompt"
+                    >
+                      📝
+                    </button>
                     <textarea
                       value={copilotInput}
                       onChange={(e) => setCopilotInput(e.target.value)}
@@ -583,6 +624,20 @@ de forma clara, objetiva e com foco prático para advogados.`;
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {showPromptsManager && (
+        <div className="contencioso-ficha-overlay">
+          <div className="contencioso-ficha" style={{ maxWidth: '90%', maxHeight: '90vh' }}>
+            <ContenciosoPromptsManager
+              onClose={() => setShowPromptsManager(false)}
+              onSelectPrompt={(prompt) => {
+                setSelectedPrompt(prompt);
+                setShowPromptsManager(false);
+              }}
+            />
           </div>
         </div>
       )}

@@ -13,6 +13,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  row-gap: 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   flex-shrink: 0;
 }
@@ -24,8 +26,8 @@
 }
 
 .monday-search {
-  flex: 1;
-  max-width: 320px;
+  flex: 1 1 200px;
+  max-width: 260px;
   margin: 0 16px;
 }
 
@@ -634,10 +636,46 @@
   color: #dc2626;
 }
 
+.contencioso-copilot-selected-prompt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  margin-bottom: 6px;
+  background: #e0f2fe;
+  border-radius: 6px;
+  border: 1px solid #bae6fd;
+  font-size: 12px;
+  color: #0369a1;
+}
+
+.contencioso-copilot-selected-prompt strong {
+  font-weight: 600;
+}
+
 .contencioso-copilot-input-row {
   display: flex;
   gap: 6px;
   margin-top: 2px;
+}
+
+.contencioso-copilot-prompt-btn {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  color: #4b5563;
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.contencioso-copilot-prompt-btn:hover {
+  background: #f3f4f6;
+  border-color: #4f46e5;
+  color: #4f46e5;
 }
 
 .contencioso-copilot-input {

@@ -1,11 +1,7 @@
-import type { AxiosStatic } from 'axios';
+import axios from 'axios';
 import { Phone, Message, DocumentRecord, DocumentImage } from '../types';
 // Importar serviço do Firestore REST API
 import { firestoreRestPromptService } from './firestoreRestService';
-
-// Jest (CRA) não transforma ESM dentro de node_modules; use o build CJS do axios.
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const axios: AxiosStatic = require('axios/dist/browser/axios.cjs');
 
 interface ApiConfig {
   baseUrl: string;

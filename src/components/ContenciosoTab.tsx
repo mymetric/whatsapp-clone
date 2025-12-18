@@ -354,6 +354,15 @@ de forma clara, objetiva e com foco prático para advogados.`;
         <div className="monday-title">
           <span className="monday-icon">⚖️</span>
           <h2>Contencioso - Itens do Board</h2>
+          <span
+            className="item-updates-count"
+            title="Total de itens baixados (carregados do board)"
+          >
+            Baixados: {items.length}
+          </span>
+          <span className="item-updates-count" title="Total de itens exibidos (após filtro)">
+            Exibindo: {filteredItems.length}
+          </span>
         </div>
         <div className="monday-search">
           <input

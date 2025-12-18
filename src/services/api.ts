@@ -1,7 +1,11 @@
-import axios from 'axios';
+import type { AxiosStatic } from 'axios';
 import { Phone, Message, DocumentRecord, DocumentImage } from '../types';
 // Importar serviço do Firestore REST API
 import { firestoreRestPromptService } from './firestoreRestService';
+
+// Jest (CRA) não transforma ESM dentro de node_modules; use o build CJS do axios.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const axios: AxiosStatic = require('axios/dist/browser/axios.cjs');
 
 interface ApiConfig {
   baseUrl: string;
@@ -105,7 +109,7 @@ export const phoneService = {
       }
       
       // Transformar os dados da API no formato esperado pela aplicação
-      const phones: Phone[] = response.data.map((item) => {
+      const phones: Phone[] = response.data.map((item: any) => {
         // Função auxiliar para extrair valor de campo (pode ser stringValue, integerValue, etc)
         const getFieldValue = (field: any): string | undefined => {
           if (!field) return undefined;

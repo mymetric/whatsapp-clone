@@ -14,7 +14,8 @@
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  row-gap: 8px;
+  row-gap: 12px;
+  column-gap: 16px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   flex-shrink: 0;
 }
@@ -50,6 +51,67 @@
 .monday-search input:focus {
   background: rgba(255, 255, 255, 0.25);
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.9);
+}
+
+.monday-filter {
+  margin: 0 8px;
+}
+
+.monday-header-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.contencioso-updating-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.15);
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.contencioso-updating-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: rgba(255, 255, 255, 0.9);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.attachment-filter-select {
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  outline: none;
+  font-size: 14px;
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: 140px;
+}
+
+.attachment-filter-select:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.attachment-filter-select:focus {
+  background: rgba(255, 255, 255, 0.25);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
+}
+
+.attachment-filter-select option {
+  background: #667eea;
+  color: #fff;
 }
 
 .monday-icon {
@@ -155,6 +217,26 @@
   border-radius: 12px;
   font-size: 12px;
   font-weight: 500;
+}
+
+.contencioso-attachment-count-badge {
+  background: #10b981;
+  color: white;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.contencioso-attachment-count-loading {
+  color: #6c757d;
+  font-size: 12px;
+  font-style: italic;
 }
 
 .item-updates {
@@ -304,9 +386,9 @@
 .contencioso-ficha {
   background: #ffffff;
   border-radius: 16px;
-  max-width: 960px;
-  width: 96%;
-  max-height: 86vh;
+  max-width: 95%;
+  width: 95%;
+  max-height: 95vh;
   display: flex;
   flex-direction: column;
   box-shadow: 0 20px 45px rgba(15, 23, 42, 0.35);
@@ -314,24 +396,25 @@
 }
 
 .contencioso-ficha-header {
-  padding: 16px 24px;
+  padding: 28px 40px;
   border-bottom: 1px solid #e5e7eb;
   display: flex;
   justify-content: space-between;
   align-items: center;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: #ffffff;
+  flex-shrink: 0;
 }
 
 .contencioso-ficha-title h2 {
   margin: 0;
-  font-size: 18px;
+  font-size: 28px;
   font-weight: 600;
 }
 
 .contencioso-ficha-subtitle {
-  margin-top: 4px;
-  font-size: 13px;
+  margin-top: 8px;
+  font-size: 18px;
   opacity: 0.9;
 }
 
@@ -340,13 +423,13 @@
   background: rgba(15, 23, 42, 0.15);
   color: #ffffff;
   border-radius: 999px;
-  width: 28px;
-  height: 28px;
+  width: 40px;
+  height: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  font-size: 16px;
+  font-size: 22px;
   line-height: 1;
   transition: background 0.15s ease, transform 0.1s ease;
 }
@@ -360,36 +443,39 @@
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
   gap: 0;
-  padding: 20px 24px 22px;
+  padding: 36px 40px 38px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
 }
 
 .contencioso-ficha-column {
-  padding-right: 20px;
+  padding-right: 36px;
 }
 
 .contencioso-ficha-column:last-child {
   padding-right: 0;
-  padding-left: 20px;
+  padding-left: 36px;
   border-left: 1px solid #f1f3f5;
 }
 
 .contencioso-ficha-column h3 {
-  margin: 0 0 8px 0;
-  font-size: 16px;
+  margin: 0 0 16px 0;
+  font-size: 22px;
   font-weight: 600;
   color: #111827;
 }
 
 .contencioso-attachments-search {
-  margin: 4px 0 6px 0;
+  margin: 8px 0 14px 0;
 }
 
 .contencioso-attachments-search input {
   width: 100%;
-  padding: 6px 10px;
+  padding: 14px 18px;
   border-radius: 999px;
   border: 1px solid #e5e7eb;
-  font-size: 13px;
+  font-size: 17px;
   outline: none;
 }
 
@@ -399,58 +485,58 @@
 }
 
 .contencioso-attachments-scroll {
-  max-height: 260px;
+  max-height: 500px;
   overflow-y: auto;
-  margin-top: 4px;
-  padding-right: 4px;
+  margin-top: 8px;
+  padding-right: 8px;
 }
 
 .contencioso-ficha-muted {
-  font-size: 13px;
+  font-size: 16px;
   color: #6b7280;
-  margin: 4px 0 0 0;
+  margin: 8px 0 0 0;
 }
 
 .contencioso-ficha-error {
-  font-size: 13px;
+  font-size: 16px;
   color: #dc2626;
-  margin: 4px 0 0 0;
+  margin: 8px 0 0 0;
 }
 
 .contencioso-attachments-list {
   list-style: none;
-  padding: 8px 0 0 0;
+  padding: 12px 0 0 0;
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
 .contencioso-attachment-item {
-  padding: 8px 10px;
+  padding: 16px 18px;
   border-radius: 8px;
   border: 1px solid #e5e7eb;
   background: #f9fafb;
   display: flex;
   flex-direction: row;
-  gap: 6px;
+  gap: 12px;
   align-items: center;
 }
 
 .contencioso-attachment-drag-hint {
-  font-size: 13px;
+  font-size: 18px;
   color: #9ca3af;
   cursor: grab;
   user-select: none;
 }
 
 .contencioso-attachment-name {
-  font-size: 13px;
+  font-size: 17px;
   color: #111827;
 }
 
 .contencioso-attachment-link {
-  font-size: 13px;
+  font-size: 17px;
   color: #2563eb;
   text-decoration: underline;
   width: fit-content;
@@ -466,20 +552,20 @@
   right: 0;
   background: linear-gradient(135deg, #10b981 0%, #059669 100%);
   color: #ecfdf5;
-  padding: 4px 10px;
+  padding: 6px 14px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   box-shadow: 0 2px 8px rgba(16, 185, 129, 0.35);
 }
 
 .contencioso-copilot-placeholder {
-  margin-top: 12px;
-  padding: 10px 12px 10px 14px;
+  margin-top: 16px;
+  padding: 16px 20px 16px 24px;
   border-radius: 10px;
   border: 1px dashed #c4b5fd;
   background: radial-gradient(circle at top left, #eef2ff 0, #f9fafb 55%);
-  font-size: 13px;
+  font-size: 16px;
   color: #4b5563;
 }
 
@@ -490,24 +576,24 @@
 }
 
 .contencioso-copilot-examples ul {
-  margin: 6px 0 0 18px;
+  margin: 8px 0 0 24px;
   padding: 0;
 }
 
 .contencioso-copilot-examples li {
-  margin-bottom: 4px;
+  margin-bottom: 6px;
 }
 
 .contencioso-copilot-selected-list {
-  margin-top: 10px;
-  padding-top: 8px;
+  margin-top: 14px;
+  padding-top: 12px;
   border-top: 1px dashed #e5e7eb;
 }
 
 .contencioso-copilot-selected-label {
-  font-size: 12px;
+  font-size: 16px;
   color: #6b7280;
-  margin-bottom: 8px;
+  margin-bottom: 12px;
   font-weight: 500;
 }
 
@@ -515,9 +601,9 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 6px 10px;
-  margin-bottom: 6px;
+  gap: 12px;
+  padding: 14px 18px;
+  margin-bottom: 10px;
   background: #f9fafb;
   border-radius: 6px;
   border: 1px solid #e5e7eb;
@@ -528,7 +614,7 @@
 }
 
 .contencioso-copilot-selected-name {
-  font-size: 13px;
+  font-size: 17px;
   font-weight: 500;
   color: #111827;
   flex: 1;
@@ -540,9 +626,9 @@
   border: none;
   color: #6b7280;
   cursor: pointer;
-  font-size: 16px;
+  font-size: 20px;
   line-height: 1;
-  padding: 2px 6px;
+  padding: 4px 8px;
   border-radius: 4px;
   transition: all 0.15s ease;
   flex-shrink: 0;
@@ -554,16 +640,16 @@
 }
 
 .contencioso-copilot-chat {
-  margin-top: 12px;
+  margin-top: 16px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
 }
 
 .contencioso-copilot-chat-messages {
-  max-height: 180px;
+  max-height: 450px;
   overflow-y: auto;
-  padding: 6px 4px;
+  padding: 14px 12px;
   border-radius: 8px;
   background: #f9fafb;
   border: 1px solid #e5e7eb;
@@ -571,22 +657,22 @@
 
 .contencioso-copilot-chat-empty {
   text-align: left;
-  font-size: 13px;
+  font-size: 16px;
   color: #4b5563;
 }
 
 .contencioso-copilot-chat-icon {
-  font-size: 20px;
-  margin-bottom: 4px;
+  font-size: 28px;
+  margin-bottom: 6px;
 }
 
 .contencioso-copilot-message {
-  margin-bottom: 6px;
+  margin-bottom: 10px;
 }
 
 .contencioso-copilot-message-content {
   display: flex;
-  gap: 6px;
+  gap: 10px;
 }
 
 .contencioso-copilot-message-user .contencioso-copilot-message-text {
@@ -599,25 +685,26 @@
 }
 
 .contencioso-copilot-message-text {
-  padding: 6px 8px;
+  padding: 14px 16px;
   border-radius: 8px;
-  font-size: 13px;
+  font-size: 17px;
   color: #111827;
   max-width: 100%;
   white-space: pre-wrap;
   word-wrap: break-word;
+  line-height: 1.6;
 }
 
 .contencioso-copilot-avatar {
-  font-size: 16px;
-  margin-top: 2px;
+  font-size: 20px;
+  margin-top: 4px;
 }
 
 .contencioso-copilot-typing-dot {
   display: inline-block;
-  width: 4px;
-  height: 4px;
-  margin-right: 3px;
+  width: 6px;
+  height: 6px;
+  margin-right: 4px;
   border-radius: 50%;
   background: #4b5563;
   animation: contencioso-typing 1s infinite ease-in-out both;
@@ -632,7 +719,7 @@
 }
 
 .contencioso-copilot-error {
-  font-size: 12px;
+  font-size: 16px;
   color: #dc2626;
 }
 
@@ -640,13 +727,13 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 6px 10px;
-  margin-bottom: 6px;
+  gap: 12px;
+  padding: 14px 18px;
+  margin-bottom: 10px;
   background: #e0f2fe;
   border-radius: 6px;
   border: 1px solid #bae6fd;
-  font-size: 12px;
+  font-size: 16px;
   color: #0369a1;
 }
 
@@ -656,17 +743,17 @@
 
 .contencioso-copilot-input-row {
   display: flex;
-  gap: 6px;
-  margin-top: 2px;
+  gap: 10px;
+  margin-top: 4px;
 }
 
 .contencioso-copilot-prompt-btn {
-  padding: 6px 10px;
+  padding: 12px 16px;
   border-radius: 8px;
   border: 1px solid #e5e7eb;
   background: #ffffff;
   color: #4b5563;
-  font-size: 16px;
+  font-size: 20px;
   cursor: pointer;
   transition: all 0.15s ease;
   flex-shrink: 0;
@@ -681,11 +768,12 @@
 .contencioso-copilot-input {
   flex: 1;
   resize: none;
-  font-size: 13px;
-  padding: 6px 8px;
+  font-size: 17px;
+  padding: 14px 16px;
   border-radius: 8px;
   border: 1px solid #e5e7eb;
   outline: none;
+  line-height: 1.6;
 }
 
 .contencioso-copilot-input:focus {
@@ -694,12 +782,12 @@
 }
 
 .contencioso-copilot-send {
-  padding: 6px 10px;
+  padding: 14px 20px;
   border-radius: 8px;
   border: none;
   background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
   color: #ffffff;
-  font-size: 13px;
+  font-size: 17px;
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;

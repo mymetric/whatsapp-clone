@@ -3,6 +3,7 @@ import { mondayService } from '../services/mondayService';
 import { firestoreRestAttachmentService, Attachment } from '../services/firestoreRestService';
 import { Prompt } from '../services/api';
 import ContenciosoPromptsManager from './ContenciosoPromptsManager';
+import { contenciosoCacheService } from '../services/contenciosoCacheService';
 import './MondayTab.css';
 
 interface ContenciosoItem {
@@ -21,6 +22,7 @@ const CONTENCIOSO_BOARD_ID = 632454515;
 const ContenciosoTab: React.FC = () => {
   const [items, setItems] = useState<ContenciosoItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [updatingInBackground, setUpdatingInBackground] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedItem, setSelectedItem] = useState<ContenciosoItem | null>(null);
@@ -39,25 +41,158 @@ const ContenciosoTab: React.FC = () => {
   const [copilotError, setCopilotError] = useState<string | null>(null);
   const [showPromptsManager, setShowPromptsManager] = useState(false);
   const [selectedPrompt, setSelectedPrompt] = useState<Prompt | null>(null);
+  const [attachmentCounts, setAttachmentCounts] = useState<Record<string, number>>({});
+  const [loadingAttachmentCounts, setLoadingAttachmentCounts] = useState(false);
+  const [attachmentFilter, setAttachmentFilter] = useState<'all' | 'with' | 'without'>('all');
 
-  const loadItems = async () => {
-    setLoading(true);
+  /**
+   * Carrega itens do cache IndexedDB (assíncrono)
+   */
+  const loadItemsFromCache = async (): Promise<ContenciosoItem[] | null> => {
+    const cachedItems = await contenciosoCacheService.loadItems(CONTENCIOSO_BOARD_ID);
+    if (cachedItems && cachedItems.length > 0) {
+      console.log('📦 ContenciosoTab: Carregando itens do cache');
+      setItems(cachedItems);
+      return cachedItems;
+    }
+    return null;
+  };
+
+  /**
+   * Busca contagens de anexos para todos os itens
+   */
+  const loadAttachmentCounts = async (itemsToLoad: ContenciosoItem[]) => {
+    setLoadingAttachmentCounts(true);
+    const counts: Record<string, number> = {};
+
+    try {
+      // Busca contagens em paralelo para todos os itens que têm numeroProcesso
+      const countPromises = itemsToLoad.map(async (item) => {
+        const numeroProcesso = item.column_values?.find(
+          (col) => col.id === 'numero_do_processo'
+        )?.text;
+
+        if (!numeroProcesso) {
+          return { itemId: item.id, count: 0 };
+        }
+
+        try {
+          const attachments = await firestoreRestAttachmentService.getAttachmentsByLawsuitId(
+            numeroProcesso
+          );
+          return { itemId: item.id, count: attachments.length };
+        } catch (err) {
+          console.error(`Erro ao buscar contagem de anexos para item ${item.id}:`, err);
+          return { itemId: item.id, count: 0 };
+        }
+      });
+
+      const results = await Promise.all(countPromises);
+      results.forEach(({ itemId, count }) => {
+        counts[itemId] = count;
+      });
+
+      setAttachmentCounts(counts);
+    } catch (err) {
+      console.error('Erro ao carregar contagens de anexos:', err);
+    } finally {
+      setLoadingAttachmentCounts(false);
+    }
+  };
+
+  /**
+   * Atualiza itens do servidor e salva no cache
+   * Só atualiza o cache se houver dados válidos (não vazios)
+   */
+  const updateItemsFromServer = async (showLoading = false) => {
+    if (showLoading) {
+      setLoading(true);
+    } else {
+      setUpdatingInBackground(true);
+    }
     setError(null);
 
     try {
-      console.log('📑 ContenciosoTab: Carregando itens do board', CONTENCIOSO_BOARD_ID);
+      console.log('📑 ContenciosoTab: Atualizando itens do board', CONTENCIOSO_BOARD_ID);
       const boardItems = await mondayService.getBoardItems(CONTENCIOSO_BOARD_ID);
-      setItems(boardItems);
+      
+      // Só salva no cache e atualiza o estado se houver dados válidos
+      // Se retornar array vazio, pode ser erro - não atualiza o cache
+      if (boardItems && boardItems.length > 0) {
+        // Salva no cache IndexedDB (persistente, sem expiração)
+        await contenciosoCacheService.saveItems(CONTENCIOSO_BOARD_ID, boardItems);
+        
+        // Atualiza o estado
+        setItems(boardItems);
 
-      if (!boardItems || boardItems.length === 0) {
-        setError('Nenhum item encontrado no board de contencioso');
+        // Carrega contagens de anexos em background
+        loadAttachmentCounts(boardItems);
+      } else {
+        // Array vazio pode indicar erro - não atualiza cache nem estado
+        // Mantém os dados do cache existente
+        console.warn('⚠️ ContenciosoTab: Resposta vazia do servidor, mantendo cache existente');
+        if (showLoading) {
+          // Se foi uma atualização forçada e retornou vazio, mostra erro
+          setError('Nenhum item encontrado no board de contencioso');
+        }
+        // Se for atualização em background, não mostra erro (mantém dados do cache)
       }
     } catch (err) {
       console.error('Erro ao carregar itens do board de contencioso:', err);
-      setError('Erro ao carregar itens do board de contencioso');
+      // Em caso de erro, não atualiza cache nem estado - mantém dados existentes
+      if (showLoading) {
+        setError('Erro ao carregar itens do board de contencioso');
+      }
+      // Se for atualização em background, não mostra erro (mantém dados do cache)
     } finally {
-      setLoading(false);
+      if (showLoading) {
+        setLoading(false);
+      } else {
+        setUpdatingInBackground(false);
+      }
     }
+  };
+
+  /**
+   * Carrega itens: primeiro do cache, depois atualiza em background
+   */
+  const loadItems = async (forceRefresh = false) => {
+    if (forceRefresh) {
+      // Atualização forçada também em background (não bloqueia interface)
+      // Só mostra loading se não houver dados no cache e não houver fichas abertas
+      const cachedItems = await loadItemsFromCache();
+      if (!cachedItems || cachedItems.length === 0) {
+        // Se não há cache, mostra loading apenas se não houver ficha aberta
+        if (!selectedItem) {
+          await updateItemsFromServer(true);
+        } else {
+          // Se há ficha aberta, atualiza em background mesmo sem cache
+          updateItemsFromServer(false);
+        }
+      } else {
+        // Se há cache, sempre atualiza em background (não interrompe fichas)
+        updateItemsFromServer(false);
+      }
+    } else {
+      // Tenta carregar do cache primeiro
+      const cachedItems = await loadItemsFromCache();
+      
+      // Se carregou do cache, busca contagens de anexos
+      if (cachedItems) {
+        loadAttachmentCounts(cachedItems);
+      }
+      
+      // Sempre atualiza em background para manter cache atualizado
+      // O cache só será substituído quando houver uma atualização bem-sucedida
+      updateItemsFromServer(false);
+    }
+  };
+
+  /**
+   * Atualiza itens em background (não bloqueia interface)
+   */
+  const refreshItems = () => {
+    updateItemsFromServer(false);
   };
 
   useEffect(() => {
@@ -256,24 +391,42 @@ Use esse contexto para responder perguntas sobre o processo, andamentos e riscos
     setCopilotLoading(true);
 
     try {
+      // Baixar anexos antes de enviar para o Grok
+      console.log(`📥 Baixando ${copilotAttachments.length} anexo(s)...`);
+      const downloadedFiles = await Promise.all(
+        copilotAttachments.map((att) => downloadAttachmentForGrok(att))
+      );
+
+      console.log(`✅ ${downloadedFiles.length} arquivo(s) baixado(s):`);
+      downloadedFiles.forEach((file, idx) => {
+        console.log(`  [${idx + 1}] ${file.filename}: ${file.mimeType}, base64 length: ${file.base64.length}`);
+      });
+
       const attachmentsPayload = copilotAttachments.map((att) => ({
         attachment_name: att.attachment_name,
         file_url: att.file_url,
         id: att.id,
       }));
 
+      const payload = {
+        question,
+        numeroProcesso: selectedNumeroProcesso,
+        itemName: selectedItem?.name,
+        attachments: attachmentsPayload,
+        files: downloadedFiles, // Enviar arquivos baixados em base64
+        promptId: selectedPrompt?.id || null,
+      };
+
+      console.log(`📤 Enviando payload para o servidor:`);
+      console.log(`  - files array length: ${payload.files.length}`);
+      console.log(`  - payload size (approx): ${JSON.stringify(payload).length} caracteres`);
+
       const response = await fetch('/api/grok/contencioso', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          question,
-          numeroProcesso: selectedNumeroProcesso,
-          itemName: selectedItem?.name,
-          attachments: attachmentsPayload,
-          promptId: selectedPrompt?.id || null,
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
@@ -307,10 +460,24 @@ Use esse contexto para responder perguntas sobre o processo, andamentos e riscos
       (col) => col.id === 'numero_do_processo'
     )?.text;
 
+    const attachmentCount = attachmentCounts[item.id] ?? null;
+
     return (
       <div key={item.id} className="monday-item">
         <div className="item-header">
-          <h3 className="item-name">{item.name}</h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1 }}>
+            <h3 className="item-name">{item.name}</h3>
+            {attachmentCount !== null && (
+              <span className="contencioso-attachment-count-badge" title={`${attachmentCount} anexo(s) nesta ficha`}>
+                📎 {attachmentCount}
+              </span>
+            )}
+            {loadingAttachmentCounts && attachmentCount === null && (
+              <span className="contencioso-attachment-count-loading" title="Carregando contagem de anexos...">
+                ...
+              </span>
+            )}
+          </div>
           {item.created_at && (
             <span className="item-updates-count">
               Criado em: {formatDate(item.created_at)}
@@ -356,16 +523,39 @@ Use esse contexto para responder perguntas sobre o processo, andamentos e riscos
 
   const filteredItems = items
     .filter((item) => {
-      if (!searchTerm.trim()) return true;
-      const numeroProcesso = item.column_values?.find(
-        (col) => col.id === 'numero_do_processo'
-      )?.text;
+      // Filtro de busca por texto
+      if (searchTerm.trim()) {
+        const numeroProcesso = item.column_values?.find(
+          (col) => col.id === 'numero_do_processo'
+        )?.text;
 
-      const term = searchTerm.toLowerCase();
-      return (
-        item.name.toLowerCase().includes(term) ||
-        (numeroProcesso && numeroProcesso.toLowerCase().includes(term))
-      );
+        const term = searchTerm.toLowerCase();
+        const matchesSearch = (
+          item.name.toLowerCase().includes(term) ||
+          (numeroProcesso && numeroProcesso.toLowerCase().includes(term))
+        );
+        if (!matchesSearch) return false;
+      }
+
+      // Filtro de anexos
+      if (attachmentFilter !== 'all') {
+        const attachmentCount = attachmentCounts[item.id] ?? null;
+        // Se ainda está carregando, não filtra (mostra todos até carregar)
+        if (attachmentCount === null && loadingAttachmentCounts) {
+          return true;
+        }
+        
+        const hasAttachments = (attachmentCount ?? 0) > 0;
+        
+        if (attachmentFilter === 'with' && !hasAttachments) {
+          return false;
+        }
+        if (attachmentFilter === 'without' && hasAttachments) {
+          return false;
+        }
+      }
+
+      return true;
     })
     .sort((a, b) => {
       // Ordena por data de criação (mais recente primeiro).
@@ -374,7 +564,9 @@ Use esse contexto para responder perguntas sobre o processo, andamentos e riscos
       return dateB - dateA;
     });
 
-  if (loading) {
+  // Só mostra loading completo se não houver ficha aberta
+  // Se houver ficha aberta, permite continuar lendo enquanto carrega
+  if (loading && !selectedItem) {
     return (
       <div className="monday-tab">
         <div className="monday-loading">
@@ -392,7 +584,7 @@ Use esse contexto para responder perguntas sobre o processo, andamentos e riscos
           <div className="error-icon">⚠️</div>
           <h3>Erro ao carregar dados</h3>
           <p>{error}</p>
-          <button onClick={loadItems} className="retry-button">
+          <button onClick={() => loadItems(true)} className="retry-button">
             Tentar Novamente
           </button>
         </div>
@@ -407,7 +599,7 @@ Use esse contexto para responder perguntas sobre o processo, andamentos e riscos
           <div className="empty-icon">📋</div>
           <h3>Nenhum dado encontrado</h3>
           <p>Não há itens cadastrados no board de contencioso</p>
-          <button onClick={loadItems} className="retry-button">
+          <button onClick={() => loadItems(true)} className="retry-button">
             Recarregar
           </button>
         </div>
@@ -439,7 +631,28 @@ Use esse contexto para responder perguntas sobre o processo, andamentos e riscos
             onChange={(e) => setSearchTerm(e.target.value)}
           />
         </div>
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <div className="monday-filter">
+          <select
+            value={attachmentFilter}
+            onChange={(e) => setAttachmentFilter(e.target.value as 'all' | 'with' | 'without')}
+            className="attachment-filter-select"
+            title="Filtrar por anexos"
+          >
+            <option value="all">Todos</option>
+            <option value="with">Com anexos</option>
+            <option value="without">Sem anexos</option>
+          </select>
+        </div>
+        <div className="monday-header-actions">
+          {updatingInBackground && (
+            <span 
+              className="contencioso-updating-indicator" 
+              title="Atualizando dados em segundo plano"
+            >
+              <span className="contencioso-updating-spinner"></span>
+              Atualizando...
+            </span>
+          )}
           <button
             onClick={() => setShowPromptsManager(true)}
             className="refresh-button"
@@ -448,11 +661,16 @@ Use esse contexto para responder perguntas sobre o processo, andamentos e riscos
           >
             📝 Prompts
           </button>
-        <button onClick={loadItems} className="refresh-button" title="Atualizar dados">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
-          </svg>
-        </button>
+          <button 
+            onClick={refreshItems} 
+            className="refresh-button" 
+            title="Atualizar dados em segundo plano (não interrompe a leitura)"
+            disabled={updatingInBackground}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+            </svg>
+          </button>
         </div>
       </div>
 

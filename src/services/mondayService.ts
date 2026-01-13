@@ -132,43 +132,40 @@ class MondayService {
    * via backend local (server/server.js), evitando CORS e exposição da API key.
    */
   async getBoardItems(boardId: number | string): Promise<MondayBoardItem[]> {
-    try {
-      // Chamada para o backend local (Express) em /api/contencioso,
-      // que por sua vez fala com a API do Monday.
-      const url = `/api/contencioso?boardId=${boardId}`;
+    // Chamada para o backend local (Express) em /api/contencioso,
+    // que por sua vez fala com a API do Monday.
+    const url = `/api/contencioso?boardId=${boardId}`;
 
-      console.log('📄 Monday: Buscando itens do board via backend local', boardId, url);
+    console.log('📄 Monday: Buscando itens do board via backend local', boardId, url);
 
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
 
-      if (!response.ok) {
-        console.error('❌ Erro HTTP ao buscar board do Monday:', response.status, response.statusText);
-        return [];
-      }
-
-      const data = await response.json();
-      console.log('✅ Monday: Resposta do board recebida do backend local:', data);
-
-      // Backend já retorna um array de itens no formato esperado
-      if (Array.isArray(data)) {
-        return data as MondayBoardItem[];
-      }
-
-      if (data && Array.isArray(data.items)) {
-        return data.items as MondayBoardItem[];
-      }
-
-      console.warn('⚠️ Monday: Formato de resposta inesperado para itens do board (backend local)');
-      return [];
-    } catch (error) {
-      console.error('❌ Erro ao buscar itens do board do Monday:', error);
-      return [];
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Erro desconhecido');
+      console.error('❌ Erro HTTP ao buscar board do Monday:', response.status, response.statusText, errorText);
+      throw new Error(`Erro HTTP ${response.status}: ${response.statusText}`);
     }
+
+    const data = await response.json();
+    console.log('✅ Monday: Resposta do board recebida do backend local:', data);
+
+    // Backend já retorna um array de itens no formato esperado
+    if (Array.isArray(data)) {
+      return data as MondayBoardItem[];
+    }
+
+    if (data && Array.isArray(data.items)) {
+      return data.items as MondayBoardItem[];
+    }
+
+    console.warn('⚠️ Monday: Formato de resposta inesperado para itens do board (backend local)');
+    // Retorna array vazio apenas se o formato for inesperado (não é erro HTTP)
+    return [];
   }
 
   // Função para formatar HTML do Monday para texto limpo

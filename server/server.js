@@ -3,7 +3,7 @@ const fs = require('fs');
 const express = require('express');
 const axios = require('axios');
 const FormData = require('form-data');
-const { PDFParse } = require('pdf-parse');
+const pdf = require('pdf-parse');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -338,9 +338,8 @@ async function extractTextFromFile(file) {
     if (mimeType === 'application/pdf' || filename.endsWith('.pdf')) {
       console.log(`📄 Detectado como PDF: ${file.filename}`);
       try {
-        // pdf-parse v2 usa classe PDFParse com 'data' para buffer
-        const parser = new PDFParse({ data: fileBuffer });
-        const result = await parser.getText();
+        // pdf-parse é uma função que recebe um buffer
+        const result = await pdf(fileBuffer);
         const extractedText = result.text || '';
         console.log(`✅ PDF processado: ${extractedText.length} caracteres extraídos`);
         if (extractedText.length === 0) {
@@ -605,11 +604,11 @@ de forma clara, objetiva e com foco prático para advogados.`;
     console.error('❌ Stack:', err.stack);
     
     // Se o erro for com arquivos, tentar fallback sem arquivos
-    if (fileIds.length > 0 && err.response?.status === 500) {
+    if (downloadedFiles.length > 0 && err.response?.status === 500) {
       console.log(`⚠️ Tentando fallback: enviar mensagem sem arquivos anexados, apenas mencionando que foram enviados`);
       
       try {
-        const fallbackMessage = `${userMessageText}\n\nNota: ${fileIds.length} arquivo(s) foram enviados para análise, mas houve um problema ao anexá-los diretamente. Por favor, analise com base nas informações do contexto.`;
+        const fallbackMessage = `${userMessageText}\n\nNota: ${downloadedFiles.length} arquivo(s) foram enviados para análise, mas houve um problema ao anexá-los diretamente. Por favor, analise com base nas informações do contexto.`;
         
         const fallbackMessages = [
           { role: 'system', content: systemPrompt },

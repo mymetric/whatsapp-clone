@@ -62,6 +62,11 @@ app.get('/api/proxy-file', async (req, res) => {
   }
 });
 
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', service: 'backend', timestamp: new Date().toISOString() });
+});
+
 // Caminho para o credentials.json na raiz do projeto
 const credentialsPath = path.join(__dirname, '..', 'credentials.json');
 
@@ -716,8 +721,8 @@ app.post('/api/monday/update', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Servidor backend rodando em http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Servidor backend rodando em http://0.0.0.0:${PORT}`);
 });
 
 

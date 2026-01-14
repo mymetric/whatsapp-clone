@@ -1,6 +1,9 @@
 #!/bin/bash
 
-# Script completo de deploy do WhatsApp Clone
+# Script de exemplo de deploy do WhatsApp Clone
+# IMPORTANTE: Este é um template. Copie para deploy.sh e preencha as credenciais.
+# O arquivo deploy.sh NÃO deve ser commitado no git (já está no .gitignore)
+
 # Uso: ./deploy.sh [GITHUB_REPO] [BRANCH]
 # Exemplo: ./deploy.sh https://github.com/usuario/whatsapp-clone.git master
 
@@ -188,6 +191,21 @@ http {
         root /usr/share/nginx/html;
         index index.html;
 
+        # Proxy reverso para o backend (API)
+        location /api/ {
+            proxy_pass http://backend:4000;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection 'upgrade';
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_cache_bypass $http_upgrade;
+            proxy_read_timeout 300s;
+            proxy_connect_timeout 75s;
+        }
+
         # Configuração para SPA (Single Page Application)
         location / {
             try_files $uri $uri/ /index.html;
@@ -217,6 +235,34 @@ http {
 EOF
 fi
 
+# Criar Dockerfile para o backend se não existir
+if [ ! -f "Dockerfile.backend" ]; then
+    log "Criando Dockerfile.backend..."
+    cat > Dockerfile.backend << 'EOF'
+# Use a imagem oficial do Node.js como base
+FROM node:18-alpine
+
+# Definir o diretório de trabalho
+WORKDIR /app
+
+# Copiar package.json e package-lock.json
+COPY package*.json ./
+
+# Instalar dependências (incluindo dependências de produção necessárias para o servidor)
+RUN npm ci
+
+# Copiar o código fonte do servidor
+COPY server ./server
+COPY credentials.json ./
+
+# Expor a porta do servidor
+EXPOSE 4000
+
+# Comando para iniciar o servidor
+CMD ["node", "server/server.js"]
+EOF
+fi
+
 # Criar docker-compose.yml se não existir
 if [ ! -f "docker-compose.yml" ]; then
     log "Criando docker-compose.yml..."
@@ -224,18 +270,38 @@ if [ ! -f "docker-compose.yml" ]; then
 version: '3.8'
 
 services:
-  $APP_NAME:
+  backend:
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: $APP_NAME-app
-    ports:
-      - "$PORT:80"
+      dockerfile: Dockerfile.backend
+    container_name: \${APP_NAME}-backend
     restart: unless-stopped
     environment:
       - NODE_ENV=production
+      - PORT=4000
     networks:
-      - $APP_NAME-network
+      - \${APP_NAME}-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:4000/api/proxy-file?url=https://firebasestorage.googleapis.com"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  \$APP_NAME:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: \${APP_NAME}-app
+    ports:
+      - "\$PORT:80"
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+    depends_on:
+      - backend
+    networks:
+      - \${APP_NAME}-network
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
       interval: 30s
@@ -244,7 +310,7 @@ services:
       start_period: 40s
 
 networks:
-  $APP_NAME-network:
+  \${APP_NAME}-network:
     driver: bridge
 EOF
 fi
@@ -271,31 +337,44 @@ dist
 EOF
 fi
 
-# Criar credentials.json com as credenciais reais
+# Criar credentials.json com as credenciais reais (para backend e frontend)
+log "⚠️  IMPORTANTE: Preencha as credenciais abaixo antes de usar este script!"
 log "Criando credentials.json com as credenciais..."
-cat > public/credentials.json << 'EOF'
+
+# Criar para o backend (raiz do projeto)
+cat > credentials.json << EOF
 {
   "users": [
     {
-      "email": "accounts@mymetric.com.br",
-      "password": "hdaqzrf7rcK/ZLcoNDKhKiCbQKYSDkQqF+iuAfygro=",
-      "name": "MyMetric Accounts",
+      "email": "EMAIL_USUARIO_1",
+      "password": "HASH_SENHA_USUARIO_1",
+      "name": "Nome Usuário 1",
       "role": "admin"
     },
     {
-      "email": "marketing@rosenbaum.adv.br",
-      "password": "wMe1lbDXeoFZzzeQTB2JwkQ53F4u8tsy9CLWx0v7vR4=",
-      "name": "Rosenbaum Marketing",
+      "email": "EMAIL_USUARIO_2",
+      "password": "HASH_SENHA_USUARIO_2",
+      "name": "Nome Usuário 2",
       "role": "user"
     }
   ],
   "api": {
-    "sendMessageUrl": "https://n8n.rosenbaum.adv.br/webhook/enviar-com-umbler",
-    "baseUrl": "https://n8n.rosenbaum.adv.br/webhook/api",
-    "apiKey": "YY2pHUzcGUFKBmZ"
+    "sendMessageUrl": "URL_WEBHOOK_ENVIAR_MENSAGEM",
+    "baseUrl": "URL_BASE_API",
+    "apiKey": "API_KEY_N8N"
+  },
+  "monday": {
+    "apiKey": "MONDAY_API_KEY_AQUI"
+  },
+  "grok": {
+    "apiKey": "GROK_API_KEY_AQUI"
   }
 }
 EOF
+
+# Criar para o frontend (public/)
+mkdir -p public
+cp credentials.json public/credentials.json
 
 # Limpar imagens antigas
 log "Limpando imagens antigas..."
@@ -315,10 +394,10 @@ sleep 15
 
 # Verificar se a aplicação está rodando
 log "Verificando se a aplicação está funcionando..."
-if curl -f "http://localhost:$PORT/health" > /dev/null 2>&1; then
+if curl -f "http://localhost:\$PORT/health" > /dev/null 2>&1; then
     log "✅ Deploy realizado com sucesso!"
-    log "🌐 Aplicação disponível em: http://localhost:$PORT"
-    log "📊 Health check: http://localhost:$PORT/health"
+    log "🌐 Aplicação disponível em: http://localhost:\$PORT"
+    log "📊 Health check: http://localhost:\$PORT/health"
 else
     warning "Aplicação pode não estar totalmente pronta ainda. Verificando logs..."
     docker-compose logs --tail=20
@@ -332,10 +411,10 @@ echo ""
 log "🎉 Deploy completo finalizado!"
 echo ""
 info "📋 Comandos úteis:"
-echo "  - Ver logs: cd $APP_DIR && docker-compose logs -f"
-echo "  - Parar: cd $APP_DIR && docker-compose down"
-echo "  - Reiniciar: cd $APP_DIR && docker-compose restart"
-echo "  - Status: cd $APP_DIR && docker-compose ps"
-echo "  - Atualizar: cd $APP_DIR && git pull && docker-compose up -d --build"
+echo "  - Ver logs: cd \$APP_DIR && docker-compose logs -f"
+echo "  - Parar: cd \$APP_DIR && docker-compose down"
+echo "  - Reiniciar: cd \$APP_DIR && docker-compose restart"
+echo "  - Status: cd \$APP_DIR && docker-compose ps"
+echo "  - Atualizar: cd \$APP_DIR && git pull && docker-compose up -d --build"
 echo ""
-info "🌐 Acesse sua aplicação em: http://localhost:$PORT"
+info "🌐 Acesse sua aplicação em: http://localhost:\$PORT"

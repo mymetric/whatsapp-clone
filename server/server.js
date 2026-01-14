@@ -721,8 +721,29 @@ app.post('/api/monday/update', async (req, res) => {
   }
 });
 
+// Verificar se o credentials.json existe antes de iniciar
+if (!fs.existsSync(credentialsPath)) {
+  console.error(`❌ ERRO CRÍTICO: credentials.json não encontrado em: ${credentialsPath}`);
+  console.error('❌ O servidor não pode iniciar sem o arquivo de credenciais.');
+  process.exit(1);
+}
+
+// Tentar carregar uma chave para verificar se o arquivo está válido
+try {
+  const testKey = loadMondayApiKey();
+  if (!testKey) {
+    console.warn('⚠️ AVISO: Monday API key não encontrada no credentials.json');
+  } else {
+    console.log('✅ credentials.json carregado com sucesso');
+  }
+} catch (err) {
+  console.error(`❌ ERRO ao validar credentials.json: ${err.message}`);
+  console.error('❌ O servidor continuará, mas pode falhar em alguns endpoints.');
+}
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Servidor backend rodando em http://0.0.0.0:${PORT}`);
+  console.log(`📁 Credentials path: ${credentialsPath}`);
 });
 
 

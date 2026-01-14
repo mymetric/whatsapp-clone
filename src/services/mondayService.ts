@@ -128,6 +128,45 @@ class MondayService {
   }
 
   /**
+   * Busca as updates de um item específico (por ID) do board de contencioso.
+   * A chamada é feita via backend local para não expor a API key do Monday.
+   */
+  async getItemUpdatesForContencioso(itemId: string): Promise<MondayItem | null> {
+    if (!itemId) return null;
+
+    try {
+      const url = `/api/contencioso/updates?itemId=${encodeURIComponent(itemId)}`;
+      console.log('📄 Monday: Buscando updates do item de contencioso via backend local', itemId, url);
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Erro desconhecido');
+        console.error('❌ Erro HTTP ao buscar updates do item do Monday:', response.status, response.statusText, errorText);
+        return null;
+      }
+
+      const data = await response.json();
+      console.log('✅ Monday: Updates do item de contencioso recebidas do backend local:', data);
+
+      if (data && data.id && Array.isArray(data.updates)) {
+        return data as MondayItem;
+      }
+
+      console.warn('⚠️ Monday: Formato de resposta inesperado para updates do item de contencioso');
+      return null;
+    } catch (error) {
+      console.error('❌ Monday: Erro ao buscar updates do item de contencioso:', error);
+      return null;
+    }
+  }
+
+  /**
    * Busca itens de um board específico do Monday (ex: board de contencioso)
    * via backend local (server/server.js), evitando CORS e exposição da API key.
    */
@@ -195,7 +234,46 @@ class MondayService {
       minute: '2-digit'
     });
   }
+
+  /**
+   * Cria um update (comentário) em um item do Monday
+   * via backend local para não expor a API key
+   */
+  async createUpdate(itemId: string, body: string): Promise<{ id: string }> {
+    if (!itemId || !body) {
+      throw new Error('itemId e body são obrigatórios');
+    }
+
+    try {
+      const url = `/api/monday/update`;
+      console.log('📝 Monday: Criando update via backend local', itemId);
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          itemId,
+          body: body.trim(),
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Erro desconhecido' }));
+        console.error('❌ Erro HTTP ao criar update no Monday:', response.status, errorData);
+        throw new Error(errorData.error || `Erro HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('✅ Monday: Update criado com sucesso:', data);
+      return data;
+    } catch (error) {
+      console.error('❌ Monday: Erro ao criar update:', error);
+      throw error;
+    }
+  }
 }
 
 export const mondayService = new MondayService();
-export type { MondayUpdate, MondayItem, MondayUpdatesResponse };
+export type { MondayUpdate, MondayItem, MondayUpdatesResponse, MondayBoardItem };

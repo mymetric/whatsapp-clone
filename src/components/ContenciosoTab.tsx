@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { mondayService } from '../services/mondayService';
+import { mondayService, MondayUpdate } from '../services/mondayService';
 import { firestoreRestAttachmentService, Attachment } from '../services/firestoreRestService';
 import { Prompt } from '../services/api';
 import ContenciosoPromptsManager from './ContenciosoPromptsManager';
@@ -44,6 +44,14 @@ const ContenciosoTab: React.FC = () => {
   const [attachmentCounts, setAttachmentCounts] = useState<Record<string, number>>({});
   const [loadingAttachmentCounts, setLoadingAttachmentCounts] = useState(false);
   const [attachmentFilter, setAttachmentFilter] = useState<'all' | 'with' | 'without'>('all');
+  const [activeFichaTab, setActiveFichaTab] = useState<'attachments' | 'updates' | 'send-update'>('attachments');
+  const [selectedItemUpdates, setSelectedItemUpdates] = useState<MondayUpdate[] | null>(null);
+  const [selectedItemUpdatesLoading, setSelectedItemUpdatesLoading] = useState(false);
+  const [selectedItemUpdatesError, setSelectedItemUpdatesError] = useState<string | null>(null);
+  const [updateText, setUpdateText] = useState<string>('');
+  const [sendingUpdate, setSendingUpdate] = useState(false);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [updateSuccess, setUpdateSuccess] = useState(false);
 
   /**
    * Carrega itens do cache IndexedDB (assíncrono)
@@ -219,17 +227,52 @@ const ContenciosoTab: React.FC = () => {
     setSelectedItemAttachments(null);
     setAttachmentsSearch('');
     setCopilotAttachments([]);
+    setActiveFichaTab('attachments');
+    setSelectedItemUpdates(null);
+    setSelectedItemUpdatesError(null);
+    setSelectedItemUpdatesLoading(true);
 
     try {
-      const attachments = await firestoreRestAttachmentService.getAttachmentsByLawsuitId(
+      // Carregar attachments e updates em paralelo
+      const attachmentsPromise = firestoreRestAttachmentService.getAttachmentsByLawsuitId(
         numeroProcesso
       );
-      setSelectedItemAttachments(attachments);
+      const updatesPromise = mondayService.getItemUpdatesForContencioso(item.id);
+
+      // Aguardar ambos, mas tratar erros separadamente para não bloquear um pelo outro
+      const results = await Promise.allSettled([attachmentsPromise, updatesPromise]);
+
+      // Processar attachments
+      if (results[0].status === 'fulfilled') {
+        setSelectedItemAttachments(results[0].value);
+      } else {
+        console.error('Erro ao carregar anexos:', results[0].reason);
+        setSelectedItemError('Erro ao carregar anexos do processo.');
+      }
+
+      // Processar updates do Monday - IMPORTANTE: sempre carregar ao abrir a ficha
+      if (results[1].status === 'fulfilled') {
+        const updates = results[1].value;
+        if (updates && Array.isArray(updates.updates)) {
+          console.log(`✅ Updates do Monday carregados: ${updates.updates.length} update(s)`);
+          setSelectedItemUpdates(updates.updates);
+        } else {
+          console.log('ℹ️ Nenhum update encontrado para este item');
+          setSelectedItemUpdates([]);
+        }
+      } else {
+        console.error('Erro ao carregar updates do Monday:', results[1].reason);
+        setSelectedItemUpdatesError('Erro ao carregar updates do Monday.com. Veja o console para mais detalhes.');
+        setSelectedItemUpdates([]); // Definir como array vazio em caso de erro
+      }
     } catch (err) {
-      console.error('Erro ao carregar anexos do processo no Firestore:', err);
-      setSelectedItemError('Erro ao carregar anexos do processo. Veja o console para mais detalhes.');
+      console.error('Erro geral ao carregar dados da ficha do processo:', err);
+      setSelectedItemError('Erro ao carregar dados do processo. Veja o console para mais detalhes.');
+      setSelectedItemUpdatesError('Erro ao carregar updates do Monday.com.');
+      setSelectedItemUpdates([]);
     } finally {
       setSelectedItemLoading(false);
+      setSelectedItemUpdatesLoading(false);
     }
   };
 
@@ -245,6 +288,14 @@ const ContenciosoTab: React.FC = () => {
     setCopilotMessages([]);
     setCopilotInput('');
     setCopilotError(null);
+    setActiveFichaTab('attachments');
+    setSelectedItemUpdates(null);
+    setSelectedItemUpdatesLoading(false);
+    setSelectedItemUpdatesError(null);
+    setUpdateText('');
+    setSendingUpdate(false);
+    setUpdateError(null);
+    setUpdateSuccess(false);
   };
 
   const handleAttachmentDragStart = (attachment: Attachment, event: React.DragEvent<HTMLLIElement>) => {
@@ -408,10 +459,30 @@ Use esse contexto para responder perguntas sobre o processo, andamentos e riscos
         id: att.id,
       }));
 
+      // Incluir um resumo dos updates do Monday.com no contexto enviado ao Grok
+      let questionWithMondayContext = question;
+      if (selectedItemUpdates && selectedItemUpdates.length > 0) {
+        const mondaySummaryLines = selectedItemUpdates.slice(0, 10).map((update, idx) => {
+          const formattedBody = mondayService.formatUpdateBody(update.body);
+          const formattedDate = mondayService.formatDate(update.created_at);
+          const creatorName = update.creator?.name ? ` por ${update.creator.name}` : '';
+          const bodyPreview =
+            formattedBody.length > 800 ? `${formattedBody.substring(0, 800)}...` : formattedBody;
+          return `${idx + 1}. [${formattedDate}]${creatorName}\n   ${bodyPreview}`;
+        });
+
+        const mondayContextBlock = `\n\n=== CONTEXTO DO MONDAY.COM PARA ESTA FICHA ===\n${mondaySummaryLines.join(
+          '\n\n',
+        )}\n\n=== FIM DO CONTEXTO DO MONDAY ===\n`;
+
+        questionWithMondayContext = `${question}\n${mondayContextBlock}`;
+      }
+
       const payload = {
-        question,
+        question: questionWithMondayContext,
         numeroProcesso: selectedNumeroProcesso,
         itemName: selectedItem?.name,
+        itemId: selectedItem?.id,
         attachments: attachmentsPayload,
         files: downloadedFiles, // Enviar arquivos baixados em base64
         promptId: selectedPrompt?.id || null,
@@ -701,7 +772,42 @@ Use esse contexto para responder perguntas sobre o processo, andamentos e riscos
 
             <div className="contencioso-ficha-body">
               <div className="contencioso-ficha-column contencioso-ficha-attachments">
-                <h3>Anexos do processo</h3>
+                <div className="contencioso-ficha-tabs">
+                  <button
+                    type="button"
+                    className={
+                      'contencioso-ficha-tab-button' +
+                      (activeFichaTab === 'attachments' ? ' contencioso-ficha-tab-button--active' : '')
+                    }
+                    onClick={() => setActiveFichaTab('attachments')}
+                  >
+                    Anexos do processo
+                  </button>
+                  <button
+                    type="button"
+                    className={
+                      'contencioso-ficha-tab-button' +
+                      (activeFichaTab === 'updates' ? ' contencioso-ficha-tab-button--active' : '')
+                    }
+                    onClick={() => setActiveFichaTab('updates')}
+                  >
+                    Updates do Monday
+                  </button>
+                  <button
+                    type="button"
+                    className={
+                      'contencioso-ficha-tab-button' +
+                      (activeFichaTab === 'send-update' ? ' contencioso-ficha-tab-button--active' : '')
+                    }
+                    onClick={() => setActiveFichaTab('send-update')}
+                  >
+                    Enviar Update
+                  </button>
+                </div>
+
+                {activeFichaTab === 'attachments' && (
+                  <>
+                    <h3>Anexos do processo</h3>
 
                 <div className="contencioso-attachments-search">
                   <input
@@ -712,59 +818,252 @@ Use esse contexto para responder perguntas sobre o processo, andamentos e riscos
                   />
                 </div>
 
-                {selectedItemLoading && (
-                  <p className="contencioso-ficha-muted">Carregando anexos...</p>
+                    {selectedItemLoading && (
+                      <p className="contencioso-ficha-muted">Carregando anexos...</p>
+                    )}
+
+                    {selectedItemError && (
+                      <p className="contencioso-ficha-error">{selectedItemError}</p>
+                    )}
+
+                    {!selectedItemLoading &&
+                      !selectedItemError &&
+                      getFilteredAttachments().length === 0 && (
+                        <p className="contencioso-ficha-muted">
+                          Nenhum anexo encontrado para este processo.
+                        </p>
+                      )}
+
+                    {!selectedItemLoading &&
+                      !selectedItemError &&
+                      getFilteredAttachments().length > 0 && (
+                        <div className="contencioso-attachments-scroll">
+                          <ul className="contencioso-attachments-list">
+                            {getFilteredAttachments().map((att) => (
+                              <li
+                                key={att.id}
+                                className="contencioso-attachment-item"
+                                draggable
+                                onDragStart={(event) => handleAttachmentDragStart(att, event)}
+                              >
+                                <div className="contencioso-attachment-drag-hint">
+                                  ⇅
+                                </div>
+                                <div className="contencioso-attachment-name">
+                                  <strong>{att.attachment_name || 'Anexo sem nome'}</strong>
+                                </div>
+                                {att.file_url ? (
+                                  <a
+                                    href={att.file_url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="contencioso-attachment-link"
+                                  >
+                                    Abrir arquivo
+                                  </a>
+                                ) : (
+                                  <span className="contencioso-ficha-muted">
+                                    URL do arquivo não disponível
+                                  </span>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                  </>
                 )}
 
-                {selectedItemError && (
-                  <p className="contencioso-ficha-error">{selectedItemError}</p>
-                )}
-
-                {!selectedItemLoading &&
-                  !selectedItemError &&
-                  getFilteredAttachments().length === 0 && (
-                    <p className="contencioso-ficha-muted">
-                      Nenhum anexo encontrado para este processo.
-                    </p>
-                  )}
-
-                {!selectedItemLoading &&
-                  !selectedItemError &&
-                  getFilteredAttachments().length > 0 && (
-                    <div className="contencioso-attachments-scroll">
-                      <ul className="contencioso-attachments-list">
-                        {getFilteredAttachments().map((att) => (
-                          <li
-                            key={att.id}
-                            className="contencioso-attachment-item"
-                            draggable
-                            onDragStart={(event) => handleAttachmentDragStart(att, event)}
-                          >
-                            <div className="contencioso-attachment-drag-hint">
-                              ⇅
+                {activeFichaTab === 'updates' && (
+                  <div className="contencioso-ficha-updates">
+                    {selectedItemUpdatesLoading && (
+                      <p className="contencioso-ficha-muted">Carregando updates do Monday...</p>
+                    )}
+                    {selectedItemUpdatesError && (
+                      <p className="contencioso-ficha-error">{selectedItemUpdatesError}</p>
+                    )}
+                    {!selectedItemUpdatesLoading &&
+                      !selectedItemUpdatesError &&
+                      (!selectedItemUpdates || selectedItemUpdates.length === 0) && (
+                        <p className="contencioso-ficha-muted">
+                          Nenhum update encontrado no Monday.com para esta ficha.
+                        </p>
+                      )}
+                    {!selectedItemUpdatesLoading &&
+                      !selectedItemUpdatesError &&
+                      selectedItemUpdates &&
+                      selectedItemUpdates.length > 0 && (
+                        <div className="monday-items">
+                          <div className="monday-item">
+                            <div className="item-header">
+                              <h3 className="item-name">Updates do Monday.com</h3>
+                              <span className="item-updates-count">
+                                {selectedItemUpdates.length} atualização(ões)
+                              </span>
                             </div>
-                          <div className="contencioso-attachment-name">
-                            <strong>{att.attachment_name || 'Anexo sem nome'}</strong>
+                            <div className="item-updates">
+                              {selectedItemUpdates.map((update) => {
+                                const formattedBody = mondayService.formatUpdateBody(update.body);
+                                const formattedDate = mondayService.formatDate(update.created_at);
+                                return (
+                                  <div key={update.id} className="monday-update">
+                                    <div className="update-header">
+                                      <div className="update-meta">
+                                        <span className="update-date">{formattedDate}</span>
+                                        {update.creator && (
+                                          <span className="update-creator">
+                                            por {update.creator.name}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div className="update-content">
+                                      {formattedBody}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
                           </div>
-                          {att.file_url ? (
-                            <a
-                              href={att.file_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="contencioso-attachment-link"
-                            >
-                              Abrir arquivo
-                            </a>
-                          ) : (
-                            <span className="contencioso-ficha-muted">
-                              URL do arquivo não disponível
-                            </span>
-                          )}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
+                        </div>
+                      )}
+                  </div>
+                )}
+
+                {activeFichaTab === 'send-update' && (
+                  <div className="contencioso-ficha-send-update">
+                    <h3>Enviar Update para o Monday</h3>
+                    <p className="contencioso-ficha-muted">
+                      Envie um update (comentário) para o item "{selectedItem?.name}" no Monday.com
+                    </p>
+                    <form
+                      onSubmit={async (e) => {
+                        e.preventDefault();
+                        if (!selectedItem || !updateText.trim()) return;
+
+                        setSendingUpdate(true);
+                        setUpdateError(null);
+                        setUpdateSuccess(false);
+
+                        try {
+                          await mondayService.createUpdate(selectedItem.id, updateText);
+                          setUpdateSuccess(true);
+                          setUpdateText('');
+                          // Recarregar updates após enviar
+                          if (selectedItem) {
+                            const updates = await mondayService.getItemUpdatesForContencioso(selectedItem.id);
+                            if (updates && Array.isArray(updates.updates)) {
+                              setSelectedItemUpdates(updates.updates);
+                            }
+                          }
+                          setTimeout(() => {
+                            setUpdateSuccess(false);
+                          }, 3000);
+                        } catch (err) {
+                          console.error('Erro ao enviar update:', err);
+                          setUpdateError(err instanceof Error ? err.message : 'Erro ao enviar update');
+                        } finally {
+                          setSendingUpdate(false);
+                        }
+                      }}
+                    >
+                      <div style={{ marginBottom: '16px' }}>
+                        <textarea
+                          value={updateText}
+                          onChange={(e) => setUpdateText(e.target.value)}
+                          placeholder="Digite o conteúdo do update..."
+                          rows={6}
+                          style={{
+                            width: '100%',
+                            padding: '12px',
+                            border: '1px solid #e5e7eb',
+                            borderRadius: '8px',
+                            fontSize: '14px',
+                            fontFamily: 'inherit',
+                            resize: 'vertical',
+                          }}
+                          disabled={sendingUpdate}
+                        />
+                        <div style={{ marginTop: '4px', fontSize: '12px', color: '#6b7280', textAlign: 'right' }}>
+                          {updateText.length} caracteres
+                        </div>
+                      </div>
+
+                      {updateError && (
+                        <div
+                          style={{
+                            padding: '12px',
+                            background: '#fee',
+                            border: '1px solid #fcc',
+                            borderRadius: '6px',
+                            color: '#c33',
+                            marginBottom: '16px',
+                            fontSize: '14px',
+                          }}
+                        >
+                          {updateError}
+                        </div>
+                      )}
+
+                      {updateSuccess && (
+                        <div
+                          style={{
+                            padding: '12px',
+                            background: '#efe',
+                            border: '1px solid #cfc',
+                            borderRadius: '6px',
+                            color: '#3c3',
+                            marginBottom: '16px',
+                            fontSize: '14px',
+                          }}
+                        >
+                          ✅ Update enviado com sucesso!
+                        </div>
+                      )}
+
+                      <button
+                        type="submit"
+                        disabled={!updateText.trim() || sendingUpdate}
+                        style={{
+                          padding: '12px 24px',
+                          background: sendingUpdate || !updateText.trim() ? '#ccc' : '#667eea',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '6px',
+                          fontSize: '14px',
+                          fontWeight: '500',
+                          cursor: sendingUpdate || !updateText.trim() ? 'not-allowed' : 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
+                        }}
+                      >
+                        {sendingUpdate ? (
+                          <>
+                            <div
+                              style={{
+                                width: '16px',
+                                height: '16px',
+                                border: '2px solid rgba(255,255,255,0.3)',
+                                borderTopColor: 'white',
+                                borderRadius: '50%',
+                                animation: 'spin 0.8s linear infinite',
+                              }}
+                            />
+                            Enviando...
+                          </>
+                        ) : (
+                          <>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                            </svg>
+                            Enviar Update
+                          </>
+                        )}
+                      </button>
+                    </form>
+                  </div>
+                )}
               </div>
 
               <div className="contencioso-ficha-column contencioso-ficha-copilot">

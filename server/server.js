@@ -231,6 +231,95 @@ app.get('/api/contencioso', async (req, res) => {
   }
 });
 
+/**
+ * Busca as updates de um item específico de contencioso no Monday.
+ * Usado tanto pela ficha do contencioso (frontend) quanto pelo contexto do Grok.
+ */
+app.get('/api/contencioso/updates', async (req, res) => {
+  const apiKey = loadMondayApiKey();
+  const rawItemId = req.query.itemId;
+
+  if (!apiKey) {
+    return res.status(500).json({ error: 'Monday API key não configurada no credentials.json' });
+  }
+
+  if (!rawItemId) {
+    return res.status(400).json({ error: 'itemId é obrigatório' });
+  }
+
+  const itemId = String(rawItemId);
+
+  const query = `
+    query ($itemId: [ID!]) {
+      items (ids: $itemId) {
+        id
+        name
+        updates {
+          id
+          body
+          created_at
+          creator {
+            id
+            name
+            email
+          }
+        }
+      }
+    }
+  `;
+
+  try {
+    console.log('📄 [server] Buscando updates do item de contencioso no Monday:', itemId);
+
+    const response = await axios.post(
+      'https://api.monday.com/v2',
+      {
+        query,
+        variables: { itemId: [itemId] },
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: apiKey,
+        },
+      },
+    );
+
+    const data = response.data;
+
+    if (data?.errors?.length) {
+      console.error('❌ [server] Monday GraphQL errors (updates):', JSON.stringify(data.errors, null, 2));
+      return res.status(502).json({ error: 'Erro do Monday GraphQL (updates)', details: data.errors });
+    }
+
+    const items = data?.data?.items;
+    if (!Array.isArray(items) || items.length === 0) {
+      console.warn('⚠️ [server] Nenhum item encontrado para itemId:', itemId);
+      return res.json(null);
+    }
+
+    const item = items[0];
+    const result = {
+      id: item.id,
+      name: item.name,
+      updates: Array.isArray(item.updates) ? item.updates : [],
+    };
+
+    console.log(
+      `✅ [server] Updates do item de contencioso retornadas: ${result.updates.length} update(s) para "${result.name}"`,
+    );
+
+    return res.json(result);
+  } catch (err) {
+    console.error('❌ [server] Erro ao buscar updates do item de contencioso no Monday:', err.response?.data || err.message);
+    const status = err.response?.status || 500;
+    return res.status(status).json({
+      error: 'Erro ao consultar updates do item no Monday',
+      details: err.response?.data || err.message,
+    });
+  }
+});
+
 // Função para extrair texto de arquivos
 async function extractTextFromFile(file) {
   try {
@@ -308,7 +397,7 @@ app.post('/api/grok/contencioso', async (req, res) => {
     return res.status(500).json({ error: 'Grok API key não configurada no credentials.json' });
   }
 
-  const { question, numeroProcesso, itemName, attachments, files } = req.body || {};
+  const { question, numeroProcesso, itemName, itemId, attachments, files } = req.body || {};
 
   if (!question || typeof question !== 'string') {
     return res.status(400).json({ error: 'question é obrigatório' });
@@ -550,6 +639,78 @@ de forma clara, objetiva e com foco prático para advogados.`;
     const status = err.response?.status || 500;
     return res.status(status).json({
       error: 'Erro ao conversar com o Grok',
+      details: err.response?.data || err.message,
+    });
+  }
+});
+
+/**
+ * Cria um update (comentário) em um item do Monday
+ */
+app.post('/api/monday/update', async (req, res) => {
+  const apiKey = loadMondayApiKey();
+  const { itemId, body } = req.body || {};
+
+  if (!apiKey) {
+    return res.status(500).json({ error: 'Monday API key não configurada no credentials.json' });
+  }
+
+  if (!itemId) {
+    return res.status(400).json({ error: 'itemId é obrigatório' });
+  }
+
+  if (!body || !body.trim()) {
+    return res.status(400).json({ error: 'body é obrigatório' });
+  }
+
+  const mutation = `
+    mutation ($itemId: ID!, $body: String!) {
+      create_update (item_id: $itemId, body: $body) {
+        id
+      }
+    }
+  `;
+
+  try {
+    console.log('📝 [server] Criando update no Monday:', itemId);
+
+    const response = await axios.post(
+      'https://api.monday.com/v2',
+      {
+        query: mutation,
+        variables: {
+          itemId: String(itemId),
+          body: String(body).trim(),
+        },
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: apiKey,
+        },
+      },
+    );
+
+    const data = response.data;
+
+    if (data?.errors?.length) {
+      console.error('❌ [server] Monday GraphQL errors (create_update):', JSON.stringify(data.errors, null, 2));
+      return res.status(502).json({ error: 'Erro do Monday GraphQL (create_update)', details: data.errors });
+    }
+
+    const update = data?.data?.create_update;
+    if (!update || !update.id) {
+      console.warn('⚠️ [server] Resposta do Monday sem ID de update');
+      return res.status(502).json({ error: 'Resposta inválida do Monday' });
+    }
+
+    console.log(`✅ [server] Update criado com sucesso: ${update.id}`);
+    return res.json({ id: update.id });
+  } catch (err) {
+    console.error('❌ [server] Erro ao criar update no Monday:', err.response?.data || err.message);
+    const status = err.response?.status || 500;
+    return res.status(status).json({
+      error: 'Erro ao criar update no Monday',
       details: err.response?.data || err.message,
     });
   }

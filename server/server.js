@@ -68,6 +68,82 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', service: 'backend', timestamp: new Date().toISOString() });
 });
 
+/**
+ * Proxy para envio de mensagem (evita CORS no browser)
+ * Body: { phone: string, message: string }
+ */
+app.options('/api/send-message', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  return res.status(200).end();
+});
+
+app.post('/api/send-message', async (req, res) => {
+  try {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+    const sendMessageUrl = process.env.SEND_MESSAGE_URL || process.env.REACT_APP_SEND_MESSAGE_URL;
+    if (!sendMessageUrl) {
+      return res.status(500).json({
+        error: 'SEND_MESSAGE_URL não configurada',
+        details: 'Configure SEND_MESSAGE_URL no .env (backend)',
+      });
+    }
+
+    const { phone, message } = req.body || {};
+    if (!phone || typeof phone !== 'string') {
+      return res.status(400).json({ error: 'phone é obrigatório (string)' });
+    }
+    if (!message || typeof message !== 'string') {
+      return res.status(400).json({ error: 'message é obrigatório (string)' });
+    }
+
+    console.log('📤 [server] Proxy envio mensagem:', {
+      phone,
+      messageLength: message.length,
+      upstream: sendMessageUrl,
+    });
+
+    const upstream = await axios.post(
+      sendMessageUrl,
+      { phone, message },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'Rosenbaum-Chat-System/1.0',
+        },
+        timeout: 30000,
+        validateStatus: () => true,
+      },
+    );
+
+    if (upstream.status < 200 || upstream.status >= 300) {
+      console.error('❌ [server] Upstream erro ao enviar mensagem:', upstream.status, upstream.data);
+      return res.status(upstream.status).json({
+        error: 'Erro ao enviar mensagem (upstream)',
+        details: upstream.data,
+        upstreamStatus: upstream.status,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      upstreamStatus: upstream.status,
+      data: upstream.data,
+    });
+  } catch (err) {
+    console.error('❌ [server] Erro ao enviar mensagem:', err.response?.data || err.message);
+    const status = err.response?.status || 500;
+    return res.status(status).json({
+      error: 'Erro ao enviar mensagem',
+      details: err.response?.data || err.message,
+    });
+  }
+});
+
 function loadMondayApiKey() {
   const apiKey = process.env.MONDAY_API_KEY;
   if (!apiKey) {

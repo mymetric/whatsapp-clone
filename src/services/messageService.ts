@@ -1,5 +1,3 @@
-import { authService } from './auth';
-
 interface SendMessageRequest {
   phone: string;
   message: string;
@@ -14,26 +12,18 @@ interface SendMessageResponse {
 class MessageService {
   async sendMessage(phone: string, message: string): Promise<SendMessageResponse> {
     try {
-      const apiConfig = authService.getApiConfig();
-      
-      if (!apiConfig?.sendMessageUrl) {
-        throw new Error('URL da API não configurada');
-      }
-
       const requestData: SendMessageRequest = {
         phone: phone,
         message: message
       };
 
-      // Usar proxy durante desenvolvimento para evitar CORS
-      const isDevelopment = process.env.NODE_ENV === 'development';
-      const apiUrl = isDevelopment 
-        ? '/webhook/enviar-com-umbler'  // Usa proxy
-        : apiConfig.sendMessageUrl;     // URL completa em produção
+      // Sempre usar proxy same-origin para evitar CORS em produção
+      // No dev (CRA), o package.json "proxy" encaminha /api/* para http://localhost:4000
+      const apiUrl = '/api/send-message';
 
       console.log('📤 Enviando mensagem:', requestData);
       console.log('🔗 URL da API:', apiUrl);
-      console.log('🌍 Modo:', isDevelopment ? 'desenvolvimento (proxy)' : 'produção');
+      console.log('🌍 Modo:', process.env.NODE_ENV);
 
       const response = await fetch(apiUrl, {
         method: 'POST',
@@ -47,25 +37,22 @@ class MessageService {
       console.log('📡 Resposta da API:', response.status, response.statusText);
 
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error('❌ Erro na resposta da API:', errorText);
-        
-        // Tratar erro específico do n8n webhook
-        if (response.status === 404) {
+        let details = '';
+        try {
+          const maybeJson = await response.json();
+          details = JSON.stringify(maybeJson);
+        } catch {
           try {
-            const errorData = JSON.parse(errorText);
-            if (errorData.message && errorData.message.includes('webhook')) {
-              throw new Error(`Webhook não ativo: ${errorData.message}. Ative o webhook no n8n primeiro.`);
-            }
-          } catch (parseError) {
-            // Se não conseguir fazer parse, usar erro genérico
+            details = await response.text();
+          } catch {
+            details = '';
           }
         }
-        
-        throw new Error(`Erro na API: ${response.status} - ${errorText}`);
+        console.error('❌ Erro na resposta da API:', details);
+        throw new Error(`Erro na API (${response.status}): ${details || response.statusText}`);
       }
 
-      const result = await response.json();
+      const result = await response.json().catch(() => ({}));
       console.log('✅ Mensagem enviada com sucesso:', result);
 
       return {

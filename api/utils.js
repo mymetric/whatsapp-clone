@@ -4,9 +4,11 @@ const pdf = require('pdf-parse');
 function loadMondayApiKey() {
   const apiKey = process.env.MONDAY_API_KEY;
   if (!apiKey) {
-    console.error('❌ Monday: MONDAY_API_KEY não encontrada no .env');
+    console.error('❌ Monday: MONDAY_API_KEY não encontrada');
+    console.error('❌ Variáveis de ambiente disponíveis:', Object.keys(process.env).filter(k => k.includes('MONDAY')));
     return null;
   }
+  console.log('✅ MONDAY_API_KEY encontrada (length:', apiKey.length, ')');
   return apiKey;
 }
 

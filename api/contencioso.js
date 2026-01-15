@@ -1,25 +1,30 @@
 const { loadMondayApiKey, axios } = require('./utils');
 
 module.exports = async (req, res) => {
-  // CORS headers
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  try {
+    // CORS headers
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+    if (req.method === 'OPTIONS') {
+      return res.status(200).end();
+    }
 
-  if (req.method !== 'GET') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+    if (req.method !== 'GET') {
+      return res.status(405).json({ error: 'Method not allowed' });
+    }
 
-  const boardId = Number(req.query.boardId) || 632454515;
-  const apiKey = loadMondayApiKey();
+    const boardId = Number(req.query.boardId) || 632454515;
+    const apiKey = loadMondayApiKey();
 
-  if (!apiKey) {
-    return res.status(500).json({ error: 'Monday API key não configurada no .env (MONDAY_API_KEY)' });
-  }
+    if (!apiKey) {
+      console.error('❌ MONDAY_API_KEY não encontrada');
+      return res.status(500).json({ 
+        error: 'Monday API key não configurada',
+        details: 'MONDAY_API_KEY não encontrada nas variáveis de ambiente'
+      });
+    }
 
   const PAGE_LIMIT = 500;
 
@@ -130,11 +135,21 @@ module.exports = async (req, res) => {
     console.log(`✅ [server] Total de itens retornados: ${allItems.length}`);
     return res.json(allItems);
   } catch (err) {
-    console.error('❌ [server] Erro ao chamar API do Monday:', err.response?.data || err.message);
+    console.error('❌ [server] Erro ao chamar API do Monday:', err);
+    console.error('❌ Stack:', err.stack);
     const status = err.response?.status || 500;
     return res.status(status).json({
       error: 'Erro ao consultar board no Monday',
-      details: err.response?.data || err.message,
+      details: err.response?.data || err.message || 'Erro desconhecido',
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
+  } catch (error) {
+    // Catch-all para erros não tratados
+    console.error('❌ [server] Erro não tratado:', error);
+    console.error('❌ Stack:', error.stack);
+    return res.status(500).json({
+      error: 'Erro interno do servidor',
+      details: error.message || 'Erro desconhecido'
     });
   }
 };

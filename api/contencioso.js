@@ -11,6 +11,7 @@ function loadMondayApiKey() {
 }
 
 module.exports = async (req, res) => {
+  // Garantir que sempre retornamos uma resposta
   try {
     // CORS headers
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -38,62 +39,60 @@ module.exports = async (req, res) => {
 
     if (!apiKey) {
       console.error('❌ MONDAY_API_KEY não encontrada');
-      console.error('❌ Variáveis de ambiente disponíveis:', Object.keys(process.env).filter(k => k.includes('MONDAY') || k.includes('API')));
       return res.status(500).json({ 
         error: 'Monday API key não configurada',
-        details: 'MONDAY_API_KEY não encontrada nas variáveis de ambiente'
+        details: 'MONDAY_API_KEY não encontrada nas variáveis de ambiente do Vercel'
       });
     }
 
     console.log('✅ MONDAY_API_KEY carregada com sucesso');
 
-  const PAGE_LIMIT = 500;
+    const PAGE_LIMIT = 500;
 
-  const firstPageQuery = `
-    query ($boardId: [ID!], $limit: Int!) {
-      boards (ids: $boardId) {
-        id
-        name
-        items_page (limit: $limit) {
-          cursor
-          items {
-            id
-            name
-            created_at
-            column_values {
+    const firstPageQuery = `
+      query ($boardId: [ID!], $limit: Int!) {
+        boards (ids: $boardId) {
+          id
+          name
+          items_page (limit: $limit) {
+            cursor
+            items {
               id
-              text
-              type
+              name
+              created_at
+              column_values {
+                id
+                text
+                type
+              }
             }
           }
         }
       }
-    }
-  `;
+    `;
 
-  const nextPageQuery = `
-    query ($boardId: [ID!], $limit: Int!, $cursor: String!) {
-      boards (ids: $boardId) {
-        id
-        name
-        items_page (limit: $limit, cursor: $cursor) {
-          cursor
-          items {
-            id
-            name
-            created_at
-            column_values {
+    const nextPageQuery = `
+      query ($boardId: [ID!], $limit: Int!, $cursor: String!) {
+        boards (ids: $boardId) {
+          id
+          name
+          items_page (limit: $limit, cursor: $cursor) {
+            cursor
+            items {
               id
-              text
-              type
+              name
+              created_at
+              column_values {
+                id
+                text
+                type
+              }
             }
           }
         }
       }
-    }
-  `;
+    `;
 
-  try {
     console.log('📄 [server] Buscando itens do board no Monday (com paginação):', boardId);
 
     const allItems = [];
@@ -122,6 +121,7 @@ module.exports = async (req, res) => {
             'Content-Type': 'application/json',
             Authorization: apiKey,
           },
+          timeout: 30000, // 30 segundos de timeout
         },
       );
 
@@ -134,6 +134,7 @@ module.exports = async (req, res) => {
 
       const boards = data?.data?.boards;
       if (!Array.isArray(boards) || boards.length === 0) {
+        console.log('⚠️ Nenhum board encontrado, retornando array vazio');
         return res.json([]);
       }
 
@@ -150,32 +151,38 @@ module.exports = async (req, res) => {
 
       cursor = pageObj?.cursor || null;
 
-      if (!cursor) break;
+      if (!cursor) {
+        console.log('✅ Paginação concluída (sem mais cursor)');
+        break;
+      }
     }
 
     console.log(`✅ [server] Total de itens retornados: ${allItems.length}`);
     return res.json(allItems);
   } catch (err) {
-    console.error('❌ [server] Erro ao chamar API do Monday:', err);
-    console.error('❌ Erro completo:', JSON.stringify(err, Object.getOwnPropertyNames(err)));
-    console.error('❌ Stack:', err.stack);
+    console.error('❌ [server] Erro ao processar requisição:', err);
+    console.error('❌ Erro name:', err.name);
+    console.error('❌ Erro message:', err.message);
+    console.error('❌ Erro stack:', err.stack);
     
     // Garantir que sempre retornamos uma resposta
     try {
       const status = err.response?.status || 500;
+      const errorMessage = err.response?.data || err.message || 'Erro desconhecido';
+      
       return res.status(status).json({
         error: 'Erro ao consultar board no Monday',
-        details: err.response?.data || err.message || 'Erro desconhecido',
+        details: typeof errorMessage === 'string' ? errorMessage : JSON.stringify(errorMessage),
         type: err.name || 'Error'
       });
     } catch (responseError) {
       console.error('❌ Erro ao enviar resposta de erro:', responseError);
-      // Se não conseguirmos enviar JSON, tentar texto simples
+      // Última tentativa - enviar resposta simples
       try {
-        res.status(500).send('Erro interno do servidor');
-      } catch (e) {
-        // Se tudo falhar, apenas logar
-        console.error('❌ Falha total ao enviar resposta');
+        return res.status(500).send('Erro interno do servidor');
+      } catch (finalError) {
+        console.error('❌ Falha total ao enviar resposta:', finalError);
+        // Se tudo falhar, não há nada mais que possamos fazer
       }
     }
   }

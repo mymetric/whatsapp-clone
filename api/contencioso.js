@@ -1,4 +1,18 @@
-const { loadMondayApiKey, axios } = require('./utils');
+let utils;
+try {
+  utils = require('./utils');
+} catch (error) {
+  console.error('❌ Erro ao carregar utils:', error);
+  module.exports = async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    return res.status(500).json({ 
+      error: 'Erro ao inicializar função',
+      details: error.message 
+    });
+  };
+}
+
+const { loadMondayApiKey, axios } = utils;
 
 module.exports = async (req, res) => {
   try {
@@ -15,16 +29,27 @@ module.exports = async (req, res) => {
       return res.status(405).json({ error: 'Method not allowed' });
     }
 
+    console.log('📥 Requisição recebida:', {
+      method: req.method,
+      query: req.query,
+      url: req.url
+    });
+
     const boardId = Number(req.query.boardId) || 632454515;
+    
+    console.log('🔑 Carregando MONDAY_API_KEY...');
     const apiKey = loadMondayApiKey();
 
     if (!apiKey) {
       console.error('❌ MONDAY_API_KEY não encontrada');
+      console.error('❌ Variáveis de ambiente disponíveis:', Object.keys(process.env).filter(k => k.includes('MONDAY') || k.includes('API')));
       return res.status(500).json({ 
         error: 'Monday API key não configurada',
         details: 'MONDAY_API_KEY não encontrada nas variáveis de ambiente'
       });
     }
+
+    console.log('✅ MONDAY_API_KEY carregada com sucesso');
 
   const PAGE_LIMIT = 500;
 
@@ -136,12 +161,26 @@ module.exports = async (req, res) => {
     return res.json(allItems);
   } catch (err) {
     console.error('❌ [server] Erro ao chamar API do Monday:', err);
+    console.error('❌ Erro completo:', JSON.stringify(err, Object.getOwnPropertyNames(err)));
     console.error('❌ Stack:', err.stack);
-    const status = err.response?.status || 500;
-    return res.status(status).json({
-      error: 'Erro ao consultar board no Monday',
-      details: err.response?.data || err.message || 'Erro desconhecido',
-      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
-    });
+    
+    // Garantir que sempre retornamos uma resposta
+    try {
+      const status = err.response?.status || 500;
+      return res.status(status).json({
+        error: 'Erro ao consultar board no Monday',
+        details: err.response?.data || err.message || 'Erro desconhecido',
+        type: err.name || 'Error'
+      });
+    } catch (responseError) {
+      console.error('❌ Erro ao enviar resposta de erro:', responseError);
+      // Se não conseguirmos enviar JSON, tentar texto simples
+      try {
+        res.status(500).send('Erro interno do servidor');
+      } catch (e) {
+        // Se tudo falhar, apenas logar
+        console.error('❌ Falha total ao enviar resposta');
+      }
+    }
   }
 };

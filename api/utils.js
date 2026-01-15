@@ -1,5 +1,11 @@
-const axios = require('axios');
-const pdf = require('pdf-parse');
+let axios, pdf;
+try {
+  axios = require('axios');
+  pdf = require('pdf-parse');
+} catch (error) {
+  console.error('❌ Erro ao carregar dependências:', error);
+  throw error;
+}
 
 function loadMondayApiKey() {
   const apiKey = process.env.MONDAY_API_KEY;

@@ -61,28 +61,17 @@ class MondayService {
     if (this.apiKey) return this.apiKey;
     
     try {
-      console.log('🔑 Monday: Tentando carregar API key...');
-      const response = await fetch('/credentials.json');
-      console.log('📡 Monday: Resposta do credentials.json:', response.status, response.statusText);
+      const apiKey = process.env.REACT_APP_API_KEY;
       
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      if (!apiKey) {
+        throw new Error('REACT_APP_API_KEY não encontrada no .env');
       }
       
-      const data = await response.json();
-      console.log('📄 Monday: Dados carregados:', data);
-      console.log('🔑 Monday: Seção API:', data.api);
-      
-      if (!data.api || !data.api.apiKey) {
-        console.error('❌ Monday: API key não encontrada na estrutura:', data);
-        throw new Error('API key não encontrada no credentials.json');
-      }
-      
-      this.apiKey = data.api.apiKey;
-      console.log('✅ Monday: API key carregada com sucesso');
+      this.apiKey = apiKey;
+      console.log('✅ Monday: API key carregada do .env com sucesso');
       return this.apiKey!; // Non-null assertion since we just assigned it
     } catch (error) {
-      console.error('❌ Monday: Erro ao carregar API key:', error);
+      console.error('❌ Monday: Erro ao carregar API key do .env:', error);
       // Fallback para desenvolvimento
       this.apiKey = 'sua-api-key-aqui';
       return this.apiKey!; // Non-null assertion since we just assigned it

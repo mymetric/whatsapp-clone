@@ -12,8 +12,10 @@
     "@types/react": "^19.1.12",
     "@types/react-dom": "^19.1.9",
     "axios": "^1.11.0",
+    "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "firebase": "^12.6.0",
+    "firebase-admin": "^13.6.0",
     "form-data": "^4.0.5",
     "google-auth-library": "^10.5.0",
     "jsrsasign": "^11.1.0",
@@ -30,7 +32,8 @@
     "server": "node server/server.js",
     "build": "react-scripts build",
     "test": "react-scripts test",
-    "eject": "react-scripts eject"
+    "eject": "react-scripts eject",
+    "add-users": "node scripts/addUsersToFirestore.js"
   },
   "eslintConfig": {
     "extends": [

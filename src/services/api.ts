@@ -10,34 +10,26 @@ interface ApiConfig {
 
 let apiConfig: ApiConfig | null = null;
 
-// Carregar configurações da API do credentials.json
+// Carregar configurações da API do .env
 const loadApiConfig = async (): Promise<ApiConfig> => {
   if (apiConfig) return apiConfig;
   
   try {
-    console.log('Tentando carregar credentials.json...');
-    const response = await fetch('/credentials.json');
-    console.log('Status da resposta do credentials.json:', response.status);
+    const baseUrl = process.env.REACT_APP_API_BASE_URL;
+    const apiKey = process.env.REACT_APP_API_KEY;
     
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-    
-    const data = await response.json();
-    console.log('Dados carregados do credentials.json:', data);
-    
-    if (!data.api || !data.api.baseUrl || !data.api.apiKey) {
-      throw new Error('Estrutura inválida do credentials.json');
+    if (!baseUrl || !apiKey) {
+      throw new Error('Variáveis de ambiente não configuradas (REACT_APP_API_BASE_URL, REACT_APP_API_KEY)');
     }
     
     apiConfig = {
-      baseUrl: data.api.baseUrl,
-      apiKey: data.api.apiKey
+      baseUrl: baseUrl,
+      apiKey: apiKey
     };
-    console.log('Configuração da API carregada:', apiConfig);
+    console.log('Configuração da API carregada do .env:', apiConfig);
     return apiConfig;
   } catch (error) {
-    console.error('Erro ao carregar configurações da API:', error);
+    console.error('Erro ao carregar configurações da API do .env:', error);
     console.error('Usando fallback para desenvolvimento');
     // Fallback para desenvolvimento
     return {
@@ -185,9 +177,11 @@ export const emailService = {
     try {
       console.log('🔍 Buscando email por email:', email);
       console.log('📡 URL da requisição:', `https://n8n.rosenbaum.adv.br/webhook/api/emails?email=${encodeURIComponent(email)}`);
-      const response = await axios.get(`https://n8n.rosenbaum.adv.br/webhook/api/emails?email=${encodeURIComponent(email)}`, {
+      const apiBaseUrl = process.env.REACT_APP_API_BASE_URL || 'https://n8n.rosenbaum.adv.br/webhook/api';
+      const apiKey = process.env.REACT_APP_API_KEY || 'YY2pHUzcGUFKBmZ';
+      const response = await axios.get(`${apiBaseUrl}/emails?email=${encodeURIComponent(email)}`, {
         headers: {
-          'apikey': 'YY2pHUzcGUFKBmZ'
+          'apikey': apiKey
         }
       });
       console.log('✅ Resposta da API de email:', response.data);
@@ -209,9 +203,11 @@ export const emailService = {
     try {
       console.log('🔍 Buscando email por telefone:', phone);
       console.log('📡 URL da requisição:', `https://n8n.rosenbaum.adv.br/webhook/api/emails?phone=${encodeURIComponent(phone)}`);
-      const response = await axios.get(`https://n8n.rosenbaum.adv.br/webhook/api/emails?phone=${encodeURIComponent(phone)}`, {
+      const apiBaseUrl = process.env.REACT_APP_API_BASE_URL || 'https://n8n.rosenbaum.adv.br/webhook/api';
+      const apiKey = process.env.REACT_APP_API_KEY || 'YY2pHUzcGUFKBmZ';
+      const response = await axios.get(`${apiBaseUrl}/emails?phone=${encodeURIComponent(phone)}`, {
         headers: {
-          'apikey': 'YY2pHUzcGUFKBmZ'
+          'apikey': apiKey
         }
       });
       console.log('✅ Resposta da API de email por telefone:', response.data);
@@ -336,9 +332,11 @@ export const promptService = {
   }
 };
 
-const DOCUMENTS_BASE_URL = 'https://n8n.rosenbaum.adv.br/webhook/api/documents';
+const DOCUMENTS_BASE_URL = process.env.REACT_APP_API_BASE_URL 
+  ? `${process.env.REACT_APP_API_BASE_URL}/documents`
+  : 'https://n8n.rosenbaum.adv.br/webhook/api/documents';
 const EXTERNAL_API_HEADERS = {
-  apikey: 'YY2pHUzcGUFKBmZ'
+  apikey: process.env.REACT_APP_API_KEY || 'YY2pHUzcGUFKBmZ'
 };
 
 const buildDriveUrl = (fileId: string) => {

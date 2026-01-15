@@ -4,6 +4,7 @@ const express = require('express');
 const axios = require('axios');
 const FormData = require('form-data');
 const pdf = require('pdf-parse');
+require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -67,43 +68,22 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', service: 'backend', timestamp: new Date().toISOString() });
 });
 
-// Caminho para o credentials.json na raiz do projeto
-const credentialsPath = path.join(__dirname, '..', 'credentials.json');
-
 function loadMondayApiKey() {
-  try {
-    const raw = fs.readFileSync(credentialsPath, 'utf-8');
-    const json = JSON.parse(raw);
-    // A chave do Monday está em:
-    // {
-    //   "monday": {
-    //     "apiKey": "SUA_CHAVE_DO_MONDAY"
-    //   }
-    // }
-    if (json.monday && json.monday.apiKey) {
-      return json.monday.apiKey;
-    }
-    console.error('❌ Monday: monday.apiKey não encontrado em credentials.json');
-    return null;
-  } catch (err) {
-    console.error('❌ Monday: erro ao ler credentials.json:', err.message);
+  const apiKey = process.env.MONDAY_API_KEY;
+  if (!apiKey) {
+    console.error('❌ Monday: MONDAY_API_KEY não encontrada no .env');
     return null;
   }
+  return apiKey;
 }
 
 function loadGrokApiKey() {
-  try {
-    const raw = fs.readFileSync(credentialsPath, 'utf-8');
-    const json = JSON.parse(raw);
-    if (json.grok && json.grok.apiKey) {
-      return json.grok.apiKey;
-    }
-    console.error('❌ Grok: grok.apiKey não encontrado em credentials.json');
-    return null;
-  } catch (err) {
-    console.error('❌ Grok: erro ao ler credentials.json:', err.message);
+  const apiKey = process.env.GROK_API_KEY;
+  if (!apiKey) {
+    console.error('❌ Grok: GROK_API_KEY não encontrada no .env');
     return null;
   }
+  return apiKey;
 }
 
 app.get('/api/contencioso', async (req, res) => {
@@ -111,7 +91,7 @@ app.get('/api/contencioso', async (req, res) => {
   const apiKey = loadMondayApiKey();
 
   if (!apiKey) {
-    return res.status(500).json({ error: 'Monday API key não configurada no credentials.json' });
+    return res.status(500).json({ error: 'Monday API key não configurada no .env (MONDAY_API_KEY)' });
   }
 
   const PAGE_LIMIT = 500;
@@ -245,7 +225,7 @@ app.get('/api/contencioso/updates', async (req, res) => {
   const rawItemId = req.query.itemId;
 
   if (!apiKey) {
-    return res.status(500).json({ error: 'Monday API key não configurada no credentials.json' });
+    return res.status(500).json({ error: 'Monday API key não configurada no .env (MONDAY_API_KEY)' });
   }
 
   if (!rawItemId) {
@@ -398,7 +378,7 @@ async function extractTextFromFile(file) {
 app.post('/api/grok/contencioso', async (req, res) => {
   const apiKey = loadGrokApiKey();
   if (!apiKey) {
-    return res.status(500).json({ error: 'Grok API key não configurada no credentials.json' });
+    return res.status(500).json({ error: 'Grok API key não configurada no .env (GROK_API_KEY)' });
   }
 
   const { question, numeroProcesso, itemName, itemId, attachments, files } = req.body || {};
@@ -656,7 +636,7 @@ app.post('/api/monday/update', async (req, res) => {
   const { itemId, body } = req.body || {};
 
   if (!apiKey) {
-    return res.status(500).json({ error: 'Monday API key não configurada no credentials.json' });
+    return res.status(500).json({ error: 'Monday API key não configurada no .env (MONDAY_API_KEY)' });
   }
 
   if (!itemId) {
@@ -720,29 +700,23 @@ app.post('/api/monday/update', async (req, res) => {
   }
 });
 
-// Verificar se o credentials.json existe (aviso apenas, não bloqueia)
-if (!fs.existsSync(credentialsPath)) {
-  console.error(`⚠️ AVISO: credentials.json não encontrado em: ${credentialsPath}`);
-  console.error('⚠️ Alguns endpoints podem falhar sem o arquivo de credenciais.');
-  console.error('⚠️ O servidor continuará, mas funcionalidades que requerem credenciais não funcionarão.');
-} else {
-  // Tentar carregar uma chave para verificar se o arquivo está válido
-  try {
-    const testKey = loadMondayApiKey();
-    if (!testKey) {
-      console.warn('⚠️ AVISO: Monday API key não encontrada no credentials.json');
-    } else {
-      console.log('✅ credentials.json carregado com sucesso');
-    }
-  } catch (err) {
-    console.error(`⚠️ AVISO: Erro ao validar credentials.json: ${err.message}`);
-    console.error('⚠️ O servidor continuará, mas pode falhar em alguns endpoints.');
-  }
+// Verificar se as variáveis de ambiente estão configuradas (aviso apenas, não bloqueia)
+const mondayKey = loadMondayApiKey();
+const grokKey = loadGrokApiKey();
+
+if (!mondayKey) {
+  console.warn('⚠️ AVISO: MONDAY_API_KEY não encontrada no .env');
+}
+if (!grokKey) {
+  console.warn('⚠️ AVISO: GROK_API_KEY não encontrada no .env');
+}
+if (mondayKey && grokKey) {
+  console.log('✅ Variáveis de ambiente (.env) carregadas com sucesso');
 }
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Servidor backend rodando em http://0.0.0.0:${PORT}`);
-  console.log(`📁 Credentials path: ${credentialsPath}`);
+  console.log(`📁 Carregando variáveis de ambiente de: .env`);
 });
 
 

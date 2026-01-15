@@ -104,14 +104,45 @@ const createJWT = async (serviceAccount: ServiceAccount): Promise<string> => {
 // Carregar credenciais do Firebase
 const loadFirebaseCredentials = async (): Promise<ServiceAccount> => {
   try {
-    const response = await fetch('/credentials.json');
-    const data: CredentialsData = await response.json();
+    // Tentar primeiro com variáveis individuais (novo formato)
+    const projectId = process.env.REACT_APP_FIREBASE_PROJECT_ID;
+    const privateKeyId = process.env.REACT_APP_FIREBASE_PRIVATE_KEY_ID;
+    const privateKey = process.env.REACT_APP_FIREBASE_PRIVATE_KEY;
+    const clientEmail = process.env.REACT_APP_FIREBASE_CLIENT_EMAIL;
     
-    if (data.firebase?.serviceAccount) {
-      return data.firebase.serviceAccount;
+    if (projectId && privateKeyId && privateKey && clientEmail) {
+      // Processar private_key: remover aspas e converter \n para quebras de linha reais
+      const processedPrivateKey = privateKey
+        .replace(/^["']|["']$/g, '') // Remove aspas no início e fim
+        .replace(/\\n/g, '\n'); // Converte \n para quebra de linha real
+      
+      const serviceAccount: ServiceAccount = {
+        type: 'service_account',
+        project_id: projectId,
+        private_key_id: privateKeyId,
+        private_key: processedPrivateKey,
+        client_email: clientEmail,
+        client_id: '', // Não obrigatório para autenticação
+        auth_uri: 'https://accounts.google.com/o/oauth2/auth',
+        token_uri: 'https://oauth2.googleapis.com/token',
+        auth_provider_x509_cert_url: 'https://www.googleapis.com/oauth2/v1/certs',
+        client_x509_cert_url: `https://www.googleapis.com/robot/v1/metadata/x509/${encodeURIComponent(clientEmail)}`,
+        universe_domain: 'googleapis.com'
+      };
+      
+      console.log('✅ Firebase service account carregado do .env (variáveis individuais)');
+      return serviceAccount;
     }
     
-    throw new Error('Service account não encontrado no credentials.json');
+    // Fallback: tentar com JSON completo (formato antigo)
+    const serviceAccountJson = process.env.REACT_APP_FIREBASE_SERVICE_ACCOUNT;
+    if (serviceAccountJson) {
+      const serviceAccount = JSON.parse(serviceAccountJson) as ServiceAccount;
+      console.log('✅ Firebase service account carregado do .env (JSON completo)');
+      return serviceAccount;
+    }
+    
+    throw new Error('Variáveis do Firebase não encontradas no .env. Configure REACT_APP_FIREBASE_PROJECT_ID, REACT_APP_FIREBASE_PRIVATE_KEY_ID, REACT_APP_FIREBASE_PRIVATE_KEY e REACT_APP_FIREBASE_CLIENT_EMAIL');
   } catch (error) {
     console.error('Erro ao carregar credenciais do Firebase:', error);
     throw error;

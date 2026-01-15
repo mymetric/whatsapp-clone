@@ -8,6 +8,15 @@ const ALLOWED_PROXY_HOSTS = new Set([
 ]);
 
 module.exports = async (req, res) => {
+  // CORS headers
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
   try {
     const rawUrl = String(req.query.url || '');
     if (!rawUrl) {

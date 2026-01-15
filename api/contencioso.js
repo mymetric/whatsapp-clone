@@ -143,13 +143,5 @@ module.exports = async (req, res) => {
       details: err.response?.data || err.message || 'Erro desconhecido',
       stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
     });
-  } catch (error) {
-    // Catch-all para erros não tratados
-    console.error('❌ [server] Erro não tratado:', error);
-    console.error('❌ Stack:', error.stack);
-    return res.status(500).json({
-      error: 'Erro interno do servidor',
-      details: error.message || 'Erro desconhecido'
-    });
   }
 };

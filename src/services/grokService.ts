@@ -16,27 +16,7 @@ interface GrokResponse {
 }
 
 class GrokService {
-  private apiKey: string | null = null;
-  private baseUrl = 'https://api.x.ai/v1/chat/completions';
-
-  private async loadApiKey(): Promise<string> {
-    if (this.apiKey) return this.apiKey;
-    
-    try {
-      const apiKey = process.env.REACT_APP_GROK_API_KEY;
-      
-      if (!apiKey) {
-        throw new Error('REACT_APP_GROK_API_KEY não encontrada no .env');
-      }
-      
-      this.apiKey = apiKey;
-      console.log('✅ Grok API key carregada do .env com sucesso');
-      return this.apiKey!; // Non-null assertion since we just assigned it
-    } catch (error) {
-      console.error('❌ Erro ao carregar Grok API key do .env:', error);
-      throw new Error('Grok API key não configurada');
-    }
-  }
+  private baseUrl = '/api/grok/chat';
 
   async generateResponse(
     userPrompt: string, 
@@ -48,8 +28,6 @@ class GrokService {
     }
   ): Promise<string> {
     try {
-      const apiKey = await this.loadApiKey();
-      
       // Construir system prompt
       const systemPrompt = context?.systemPrompt || `Você é um assistente especializado em atendimento ao cliente via WhatsApp. 
 Sua função é gerar respostas profissionais, amigáveis e úteis para clientes.
@@ -115,7 +93,7 @@ Instruções:
         content: userPrompt
       });
 
-      console.log('🤖 Enviando payload para Grok:');
+      console.log('🤖 Enviando payload para Grok (via backend):');
       console.log('📝 System Prompt:', systemPrompt.substring(0, 200) + '...');
       console.log('💬 Total de mensagens:', messages.length);
       console.log('📞 Contexto:', {
@@ -128,14 +106,12 @@ Instruções:
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`
         },
         body: JSON.stringify({
           model: 'grok-4-fast',
           messages: messages,
           max_tokens: context?.systemPrompt ? 40000 : 1000, // Mais tokens para o copiloto
           temperature: 0.7,
-          stream: false
         })
       });
 
@@ -188,8 +164,6 @@ Instruções:
     },
   ): Promise<string> {
     try {
-      const apiKey = await this.loadApiKey();
-
       const systemPrompt = context?.systemPrompt || `Você é um assistente especializado.`;
 
       const messages: GrokMessage[] = [
@@ -242,14 +216,12 @@ Instruções:
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
           model: 'grok-4-fast',
           messages,
           max_tokens: 40000,
           temperature: 0.7,
-          stream: false,
         }),
       });
 

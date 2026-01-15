@@ -374,6 +374,55 @@ async function extractTextFromFile(file) {
   }
 }
 
+// Endpoint para conversas genéricas com o Grok
+app.post('/api/grok/chat', async (req, res) => {
+  const apiKey = loadGrokApiKey();
+  if (!apiKey) {
+    return res.status(500).json({ error: 'Grok API key não configurada no .env (GROK_API_KEY)' });
+  }
+
+  const { messages, model, max_tokens, temperature } = req.body || {};
+
+  if (!messages || !Array.isArray(messages)) {
+    return res.status(400).json({ error: 'messages array é obrigatório' });
+  }
+
+  console.log(`\n📥 ========== REQUISIÇÃO GROK CHAT RECEBIDA ==========`);
+  console.log(`  - model: ${model || 'grok-4-fast'}`);
+  console.log(`  - messages count: ${messages.length}`);
+  console.log(`  - max_tokens: ${max_tokens}`);
+
+  try {
+    const response = await axios.post(
+      'https://api.x.ai/v1/chat/completions',
+      {
+        model: model || 'grok-4-fast',
+        messages,
+        max_tokens: max_tokens || 1000,
+        temperature: temperature || 0.7,
+        stream: false,
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+      },
+    );
+
+    const data = response.data;
+    console.log(`✅ Resposta do Grok recebida com sucesso`);
+    return res.json(data);
+  } catch (err) {
+    console.error('❌ [server] Erro ao chamar Grok:', err.response?.status, err.message);
+    const status = err.response?.status || 500;
+    return res.status(status).json({
+      error: 'Erro ao conversar com o Grok',
+      details: err.response?.data || err.message,
+    });
+  }
+});
+
 // Endpoint para conversar com o Grok usando contexto de contencioso
 app.post('/api/grok/contencioso', async (req, res) => {
   const apiKey = loadGrokApiKey();

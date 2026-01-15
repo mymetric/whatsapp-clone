@@ -1,10 +1,16 @@
-let axios, pdf;
+let axios;
+let pdf = null;
+
 try {
   axios = require('axios');
+} catch (error) {
+  console.error('❌ Erro ao carregar axios:', error);
+}
+
+try {
   pdf = require('pdf-parse');
 } catch (error) {
-  console.error('❌ Erro ao carregar dependências:', error);
-  throw error;
+  console.warn('⚠️ pdf-parse não pôde ser carregado (funcionalidade de PDF limitada):', error.message);
 }
 
 function loadMondayApiKey() {
@@ -39,6 +45,12 @@ async function extractTextFromFile(file) {
     // PDF - verificar por MIME type ou extensão
     if (mimeType === 'application/pdf' || filename.endsWith('.pdf')) {
       console.log(`📄 Detectado como PDF: ${file.filename}`);
+      
+      if (!pdf) {
+        console.warn('⚠️ pdf-parse não está disponível. Pulando extração de PDF.');
+        return null;
+      }
+
       try {
         const result = await pdf(fileBuffer);
         const extractedText = result.text || '';

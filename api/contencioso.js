@@ -1,18 +1,14 @@
-let utils;
-try {
-  utils = require('./utils');
-} catch (error) {
-  console.error('❌ Erro ao carregar utils:', error);
-  module.exports = async (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    return res.status(500).json({ 
-      error: 'Erro ao inicializar função',
-      details: error.message 
-    });
-  };
-}
+// Carregar dependências
+const axios = require('axios');
 
-const { loadMondayApiKey, axios } = utils;
+function loadMondayApiKey() {
+  const apiKey = process.env.MONDAY_API_KEY;
+  if (!apiKey) {
+    console.error('❌ Monday: MONDAY_API_KEY não encontrada');
+    return null;
+  }
+  return apiKey;
+}
 
 module.exports = async (req, res) => {
   try {

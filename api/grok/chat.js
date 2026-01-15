@@ -10,6 +10,12 @@ module.exports = async (req, res) => {
     return res.status(200).end();
   }
 
+  // Ensure axios is available
+  if (!axios) {
+    console.error('❌ Axios não carregado corretamente no utils');
+    return res.status(500).json({ error: 'Erro interno do servidor (dependências)' });
+  }
+
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }

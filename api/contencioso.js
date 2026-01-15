@@ -99,9 +99,18 @@ module.exports = async (req, res) => {
     const seenIds = new Set();
     let cursor = null;
     let page = 0;
-    const MAX_PAGES = 200;
+    const MAX_PAGES = 10; // Reduzir para evitar timeout (10 páginas = 5000 itens máximo)
+    const startTime = Date.now();
+    const MAX_EXECUTION_TIME = 50000; // 50 segundos máximo de execução
 
     while (page < MAX_PAGES) {
+      // Verificar se estamos perto do timeout
+      const elapsed = Date.now() - startTime;
+      if (elapsed > MAX_EXECUTION_TIME) {
+        console.warn(`⚠️ Tempo de execução próximo do limite (${elapsed}ms), retornando itens coletados até agora`);
+        break;
+      }
+
       page += 1;
 
       const query = cursor ? nextPageQuery : firstPageQuery;
@@ -121,7 +130,7 @@ module.exports = async (req, res) => {
             'Content-Type': 'application/json',
             Authorization: apiKey,
           },
-          timeout: 30000, // 30 segundos de timeout
+          timeout: 20000, // 20 segundos de timeout por requisição
         },
       );
 

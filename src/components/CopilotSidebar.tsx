@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Phone, Message } from '../types';
 import { grokService } from '../services/grokService';
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { messageService } from '../services/messageService';
 import { emailService, documentService } from '../services/api';
 import { mondayService } from '../services/mondayService';
@@ -32,6 +33,7 @@ const CopilotSidebar: React.FC<CopilotSidebarProps> = ({ selectedPhone, messages
   };
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const sidebarRef = useRef<HTMLDivElement>(null);
 

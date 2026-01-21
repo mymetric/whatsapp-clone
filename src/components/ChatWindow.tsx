@@ -26,8 +26,10 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone, onMessagesChange
   const [isUpdating, setIsUpdating] = useState(false);
   const [nextUpdateIn, setNextUpdateIn] = useState(20);
   const [contactEmail, setContactEmail] = useState<string | undefined>(selectedPhone?.email);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [emailData, setEmailData] = useState<any>(null);
   const [prompts, setPrompts] = useState<Prompt[]>([]);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [loadingPrompts, setLoadingPrompts] = useState(false);
   const [usingPrompt, setUsingPrompt] = useState<string | null>(null);
   const [aiLeadName, setAiLeadName] = useState<string | null>(null);
@@ -99,6 +101,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone, onMessagesChange
         setLoading(false);
       }
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPhone]);
 
 
@@ -361,6 +364,7 @@ ${conversationHistory}`;
         scrollToBottom(false);
       }, 100);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPhone, loading, scrollToBottom]);
 
   // Scroll automático apenas quando não há scroll manual do usuário

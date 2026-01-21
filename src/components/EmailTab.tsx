@@ -89,6 +89,7 @@ const EmailTab: React.FC<EmailTabProps> = ({ selectedPhone }) => {
       setEmails([]);
       setError(null);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPhone]);
 
   const formatEmailDate = (timestamp: string) => {

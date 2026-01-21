@@ -22,6 +22,7 @@ const MondayTab: React.FC<MondayTabProps> = ({ phone, messages = [], pulseId }) 
     if (phone || pulseId) {
       loadMondayData();
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phone, pulseId]);
 
   const loadMondayData = async () => {

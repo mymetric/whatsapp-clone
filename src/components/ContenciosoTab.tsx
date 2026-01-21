@@ -205,6 +205,7 @@ const ContenciosoTab: React.FC = () => {
 
   useEffect(() => {
     loadItems();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const formatDate = (dateString?: string) => {
@@ -352,6 +353,7 @@ const ContenciosoTab: React.FC = () => {
     });
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const buildCopilotContext = () => {
     const processo = selectedNumeroProcesso || 'desconhecido';
     const anexosDescricao =

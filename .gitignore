@@ -32,3 +32,5 @@ deploy.sh
 deploy.sh.example
 deploy*.sh
 !deploy.sh.example
+.vercel
+.env*.local

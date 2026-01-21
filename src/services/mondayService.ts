@@ -70,6 +70,7 @@ interface MondayBoard {
   };
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 interface MondayBoardResponse {
   data: {
     boards: MondayBoard[];

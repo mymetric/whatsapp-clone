@@ -3,6 +3,8 @@ import { Phone, Message } from '../types';
 import { messageService as apiMessageService, emailService, promptService, Prompt } from '../services/api';
 import { messageService } from '../services/messageService';
 import { grokService } from '../services/grokService';
+import { firestoreRestPhoneAIService } from '../services/firestoreRestService';
+import { mondayService } from '../services/mondayService';
 import MondayTab from './MondayTab';
 import EmailTab from './EmailTab';
 import DocumentsTab from './DocumentsTab';
@@ -12,6 +14,8 @@ interface ChatWindowProps {
   selectedPhone: Phone | null;
   onMessagesChange?: (messages: Message[]) => void;
 }
+
+const ATENDIMENTO_BOARD_ID = 607533664;
 
 const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone, onMessagesChange }) => {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -26,10 +30,23 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone, onMessagesChange
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [loadingPrompts, setLoadingPrompts] = useState(false);
   const [usingPrompt, setUsingPrompt] = useState<string | null>(null);
+  const [aiLeadName, setAiLeadName] = useState<string | null>(null);
+  const [showCreateLeadModal, setShowCreateLeadModal] = useState(false);
+  const [creatingLead, setCreatingLead] = useState(false);
+  const [leadNameInput, setLeadNameInput] = useState('');
+  const [leadEmailInput, setLeadEmailInput] = useState('');
+  const [createLeadError, setCreateLeadError] = useState<string | null>(null);
+  const [statusOptions, setStatusOptions] = useState<Record<string, string[]>>({});
+  const [statusValue, setStatusValue] = useState('');
+  const [status1Value, setStatus1Value] = useState('');
+  const [status14Value, setStatus14Value] = useState('');
+  const [status152Value, setStatus152Value] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [userScrolled, setUserScrolled] = useState(false);
+  const [aiActive, setAiActive] = useState<boolean | null>(null);
+  const [loadingAIStatus, setLoadingAIStatus] = useState(false);
 
   const scrollToBottom = useCallback((smooth = false) => {
     if (messagesEndRef.current) {
@@ -143,7 +160,197 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone, onMessagesChange
       };
       
       getEmail();
+
+      // Buscar estado de IA do telefone
+      const getAIStatus = async () => {
+        setLoadingAIStatus(true);
+        try {
+          const status = await firestoreRestPhoneAIService.getAIStatus(selectedPhone._id);
+          setAiActive(status !== null ? status : false);
+        } catch (error) {
+          console.error('❌ Erro ao buscar estado de IA:', error);
+          setAiActive(false);
+        } finally {
+          setLoadingAIStatus(false);
+        }
+      };
+      
+      getAIStatus();
+
+      // Resetar nome de lead gerado por IA e opções de status ao trocar de contato
+      setAiLeadName(null);
+      setStatusOptions({});
+      setStatusValue('');
+      setStatus1Value('');
+      setStatus14Value('');
+      setStatus152Value('');
     }
+  }, [selectedPhone]);
+
+  // Buscar nome na conversa usando padrões e IA
+  useEffect(() => {
+    const extractNameFromConversation = async () => {
+      if (!selectedPhone) return;
+      // Se já existe nome de lead cadastrado, não sobrescreve
+      if (selectedPhone.lead_name && selectedPhone.lead_name.trim()) return;
+      // Precisa ter pelo menos algumas mensagens para ter contexto
+      if (!messages || messages.length === 0) return;
+
+      try {
+        // PRIMEIRO: Tentar extrair nome usando padrões regex comuns
+        const clientMessages = messages.filter(msg => msg.source !== 'Member');
+        
+        // Padrões comuns de apresentação em português
+        const namePatterns = [
+          /(?:meu nome (?:é|eh)|me chamo|sou (?:o|a))\s+([A-ZÀÁÂÃÄÅÇÈÉÊËÌÍÎÏÑÒÓÔÕÖÙÚÛÜÝ][a-zàáâãäåçèéêëìíîïñòóôõöùúûüý]+(?:\s+[A-ZÀÁÂÃÄÅÇÈÉÊËÌÍÎÏÑÒÓÔÕÖÙÚÛÜÝ][a-zàáâãäåçèéêëìíîïñòóôõöùúûüý]+)+)/i,
+          /(?:aqui (?:é|eh) (?:o|a))\s+([A-ZÀÁÂÃÄÅÇÈÉÊËÌÍÎÏÑÒÓÔÕÖÙÚÛÜÝ][a-zàáâãäåçèéêëìíîïñòóôõöùúûüý]+(?:\s+[A-ZÀÁÂÃÄÅÇÈÉÊËÌÍÎÏÑÒÓÔÕÖÙÚÛÜÝ][a-zàáâãäåçèéêëìíîïñòóôõöùúûüý]+)+)/i,
+          /^(?:oi|olá|ola|bom dia|boa tarde|boa noite)[,.]?\s+(?:meu nome é|me chamo|sou)\s+([A-ZÀÁÂÃÄÅÇÈÉÊËÌÍÎÏÑÒÓÔÕÖÙÚÛÜÝ][a-zàáâãäåçèéêëìíîïñòóôõöùúûüý]+(?:\s+[A-ZÀÁÂÃÄÅÇÈÉÊËÌÍÎÏÑÒÓÔÕÖÙÚÛÜÝ][a-zàáâãäåçèéêëìíîïñòóôõöùúûüý]+)+)/i,
+          // Nome no início da mensagem após saudação
+          /^(?:oi|olá|ola|bom dia|boa tarde|boa noite)[,.]?\s+([A-ZÀÁÂÃÄÅÇÈÉÊËÌÍÎÏÑÒÓÔÕÖÙÚÛÜÝ][a-zàáâãäåçèéêëìíîïñòóôõöùúûüý]+(?:\s+[A-ZÀÁÂÃÄÅÇÈÉÊËÌÍÎÏÑÒÓÔÕÖÙÚÛÜÝ][a-zàáâãäåçèéêëìíîïñòóôõöùúûüý]+)+)/i,
+        ];
+
+        let extractedName = '';
+        
+        // Buscar nas primeiras 20 mensagens do cliente (geralmente se apresentam no início)
+        for (const msg of clientMessages.slice(0, 20)) {
+          const content = msg.content || '';
+          for (const pattern of namePatterns) {
+            const match = content.match(pattern);
+            if (match && match[1]) {
+              const name = match[1].trim();
+              // Validar que tem pelo menos 2 palavras (nome e sobrenome)
+              const words = name.split(/\s+/);
+              if (words.length >= 2 && words.every(w => w.length >= 2)) {
+                extractedName = name;
+                console.log('✅ Nome extraído por padrão regex:', extractedName);
+                setAiLeadName(extractedName);
+                return;
+              }
+            }
+          }
+        }
+
+        // SEGUNDO: Se não encontrou por regex, usar IA
+        console.log('🤖 Nome não encontrado por padrões, usando IA...');
+        
+        // Montar histórico de conversa em formato legível
+        const recentMessages = messages.slice(-30); // usa até 30 últimas mensagens
+        const conversationHistory = recentMessages
+          .map((msg) => {
+            const sender = msg.source === 'Member' ? 'Você' : 'Cliente';
+            const time = new Date(msg._updateTime).toLocaleString('pt-BR');
+            return `[${time}] ${sender}: ${msg.content || ''}`;
+          })
+          .join('\n');
+
+        const userPrompt = `Você é um assistente especializado em identificar nomes em conversas de WhatsApp.
+
+Abaixo está o histórico recente de uma conversa entre "Você" (atendente) e "Cliente" (pessoa que está falando com o escritório).
+
+TAREFA: Identifique o NOME COMPLETO da pessoa que está como "Cliente".
+
+INSTRUÇÕES IMPORTANTES:
+1. O cliente pode se apresentar de várias formas:
+   - "Meu nome é João da Silva"
+   - "Aqui é Maria Pereira"
+   - "Olá, sou Pedro Santos"
+   - "Bom dia, João Silva falando"
+   
+2. Priorize nomes que aparecem no início da conversa (primeiras mensagens do cliente)
+
+3. O nome deve ter pelo menos NOME e SOBRENOME (mínimo 2 palavras)
+
+4. Se encontrar apenas primeiro nome, tente inferir o sobrenome se mencionado posteriormente
+
+5. Se NÃO conseguir identificar nenhum nome completo com certeza, responda: DESCONHECIDO
+
+RESPONDA APENAS COM O NOME COMPLETO (sem aspas, sem explicações, sem texto adicional).
+
+Histórico da conversa:
+${conversationHistory}`;
+
+        const response = await grokService.generateResponse(userPrompt, {
+          conversationHistory,
+          phoneNumber: selectedPhone._id,
+          lastMessage: messages[messages.length - 1]?.content,
+        });
+
+        const rawName = (response || '').trim();
+        if (!rawName) return;
+
+        // Normalizar resposta
+        const cleaned = rawName
+          .replace(/^["'«»]+|["'«»]+$/g, '') // remove aspas e similares nas pontas
+          .replace(/\.$/, '') // remove ponto final
+          .trim();
+
+        if (!cleaned || cleaned.toUpperCase() === 'DESCONHECIDO') {
+          console.log('⚠️ IA não conseguiu identificar nome na conversa');
+          return;
+        }
+
+        // Validar que tem pelo menos 2 palavras
+        const words = cleaned.split(/\s+/);
+        if (words.length < 2) {
+          console.log('⚠️ Nome identificado pela IA tem apenas uma palavra:', cleaned);
+          return;
+        }
+
+        console.log('✅ Nome extraído pela IA:', cleaned);
+        setAiLeadName(cleaned);
+      } catch (error) {
+        console.error('❌ Erro ao extrair nome do lead:', error);
+      }
+    };
+
+    extractNameFromConversation();
+  }, [selectedPhone, messages]);
+  
+  // Função utilitária para normalizar telefone (mantém só dígitos)
+  const normalizePhone = (phone: string | undefined | null): string => {
+    if (!phone) return '';
+    return phone.replace(/[^0-9]/g, '');
+  };
+
+  // Carregar opções de status das colunas do board ao selecionar telefone
+  useEffect(() => {
+    const loadStatusOptions = async () => {
+      if (!selectedPhone) {
+        setStatusOptions({});
+        return;
+      }
+
+      try {
+        console.log('📅 Carregando opções de status do board para telefone:', selectedPhone._id);
+        const { columns } = await mondayService.getBoardItemsWithColumns(ATENDIMENTO_BOARD_ID);
+
+        // Extrair opções de labels dos status da configuração da coluna (settings_str)
+        const targetStatusIds = ['status', 'status_1', 'status_14', 'status_152'];
+        const newStatusOptions: Record<string, string[]> = {};
+
+        if (Array.isArray(columns)) {
+          columns.forEach((col: any) => {
+            if (!col || !targetStatusIds.includes(col.id) || col.type !== 'status') return;
+            if (!col.settings_str) return;
+            try {
+              const settings = JSON.parse(col.settings_str);
+              const labelsObj = settings?.labels || {};
+              const labels = Object.values(labelsObj).filter((v: any) => typeof v === 'string' && v.trim().length > 0) as string[];
+              newStatusOptions[col.id] = labels;
+            } catch (e) {
+              console.error('❌ Erro ao parsear settings_str da coluna do Monday:', col.id, e);
+            }
+          });
+        }
+
+        console.log('✅ Opções de status carregadas:', Object.keys(newStatusOptions).length, 'colunas');
+        setStatusOptions(newStatusOptions);
+      } catch (error) {
+        console.error('❌ Erro ao carregar opções de status do Monday:', error);
+      }
+    };
+
+    loadStatusOptions();
   }, [selectedPhone]);
 
   // Scroll para o final quando carregar mensagens de um contato
@@ -389,6 +596,223 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone, onMessagesChange
     setNewMessage(''); // Limpar mensagem ao ocultar
   };
 
+  const handleToggleAI = async () => {
+    if (!selectedPhone || loadingAIStatus) return;
+    
+    const newStatus = !aiActive;
+    setLoadingAIStatus(true);
+    
+    try {
+      await firestoreRestPhoneAIService.setAIStatus(selectedPhone._id, newStatus);
+      setAiActive(newStatus);
+      console.log(`✅ Estado de IA atualizado: ${newStatus ? 'ON' : 'OFF'}`);
+    } catch (error) {
+      console.error('❌ Erro ao atualizar estado de IA:', error);
+      alert('Erro ao atualizar estado de IA. Tente novamente.');
+    } finally {
+      setLoadingAIStatus(false);
+    }
+  };
+
+  // Gerar nome sugerido para o lead (prioriza IA, depois dados existentes)
+  const generateSuggestedLeadName = (): string => {
+    // 0) Nome extraído pela IA da conversa
+    if (aiLeadName && aiLeadName.trim()) {
+      return aiLeadName.trim();
+    }
+
+    // 1) Nome já cadastrado no backend, se existir
+    if (selectedPhone?.lead_name && selectedPhone.lead_name.trim()) {
+      return selectedPhone.lead_name.trim();
+    }
+
+    // 2) Possíveis campos extras (name, contactName)
+    // @ts-ignore - campos adicionais que possam existir
+    const displayName = (selectedPhone as any)?.name || (selectedPhone as any)?.contactName;
+    if (displayName && typeof displayName === 'string' && displayName.trim()) {
+      return displayName.trim();
+    }
+
+    // 3) Fallback: nome descritivo com data/hora
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    });
+    const timeStr = now.toLocaleTimeString('pt-BR', {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    return `Lead WhatsApp - ${dateStr} ${timeStr}`;
+  };
+
+  const handleOpenCreateLeadModal = () => {
+    if (!selectedPhone) return;
+
+    const suggestedName = generateSuggestedLeadName();
+    setLeadNameInput(suggestedName);
+    setLeadEmailInput(selectedPhone.email || '');
+    // Inicializar selects de status sem seleção (usuário escolhe)
+    setStatusValue('');
+    setStatus1Value('');
+    setStatus14Value('');
+    setStatus152Value('');
+    setCreateLeadError(null);
+    setShowCreateLeadModal(true);
+  };
+
+  const handleCreateLead = async () => {
+    console.log('🚀 handleCreateLead chamado');
+    
+    if (!selectedPhone) {
+      console.error('❌ selectedPhone é null');
+      return;
+    }
+    
+    if (creatingLead) {
+      console.warn('⚠️ Já está criando lead, ignorando...');
+      return;
+    }
+
+    if (!leadNameInput.trim()) {
+      console.error('❌ Nome do lead está vazio');
+      setCreateLeadError('Por favor, informe o nome do lead');
+      return;
+    }
+
+    console.log('✅ Validações iniciais passaram, iniciando criação...');
+    setCreatingLead(true);
+    setCreateLeadError(null);
+
+    try {
+      // Checagem em tempo real no Monday (board) para evitar duplicidade - movida para cá para não atrasar o botão
+      console.log('🔍 Verificando duplicidade de telefone no Monday antes de cadastrar...');
+      try {
+        const { items } = await mondayService.getBoardItemsWithColumns(ATENDIMENTO_BOARD_ID);
+        const targetPhone = normalizePhone(selectedPhone._id);
+
+        const existsNow = items.some((item) => {
+          if (!item || !Array.isArray(item.column_values)) return false;
+          const phoneCol = item.column_values.find((col: any) => {
+            const colId = col.id || col?.column?.id || '';
+            const colTitle = col?.column?.title || '';
+            return (
+              colId === 'telefone' ||
+              colTitle.toLowerCase().includes('telefone')
+            );
+          });
+          if (!phoneCol || !phoneCol.text) return false;
+
+          const colPhone = normalizePhone(phoneCol.text);
+          if (!colPhone || !targetPhone) return false;
+
+          return (
+            colPhone === targetPhone ||
+            colPhone.endsWith(targetPhone) ||
+            targetPhone.endsWith(colPhone)
+          );
+        });
+
+        if (existsNow) {
+          setCreateLeadError('Já existe um lead cadastrado no Monday para este telefone.');
+          return;
+        }
+        console.log('✅ Telefone não duplicado, prosseguindo com cadastro...');
+      } catch (verifyError) {
+        console.error('❌ Erro na checagem de duplicidade do board do Monday:', verifyError);
+        // Continua o fluxo mesmo com erro na verificação
+      }
+
+      const phone = selectedPhone._id;
+      const itemName = leadNameInput.trim();
+
+      // Telefone sempre vai na coluna "telefone"
+      const columnValues: Record<string, any> = {};
+      columnValues['telefone'] = phone;
+
+      // Email opcional, configurável via .env
+      const emailColumnId = process.env.REACT_APP_MONDAY_EMAIL_COLUMN_ID;
+      if (emailColumnId && leadEmailInput.trim()) {
+        columnValues[emailColumnId] = leadEmailInput.trim();
+      }
+
+      // Colunas de status (valores fechados - usamos label retornado pela API)
+      if (statusValue) {
+        columnValues['status'] = { label: statusValue };
+      }
+      if (status1Value) {
+        columnValues['status_1'] = { label: status1Value };
+      }
+      if (status14Value) {
+        columnValues['status_14'] = { label: status14Value };
+      }
+      if (status152Value) {
+        columnValues['status_152'] = { label: status152Value };
+      }
+
+      console.log('📝 Criando lead no board atendimento (via Chat):', {
+        boardId: ATENDIMENTO_BOARD_ID,
+        itemName,
+        email: leadEmailInput,
+        phone,
+        columnValues,
+      });
+
+      console.log('⏳ Chamando mondayService.createItem...');
+      const result = await mondayService.createItem(ATENDIMENTO_BOARD_ID, itemName, columnValues);
+      console.log('📦 Resultado recebido do createItem:', result);
+
+      if (!result || !result.id) {
+        throw new Error('createItem não retornou um resultado válido');
+      }
+
+      console.log('✅ Lead criado com sucesso (via Chat):', result);
+
+      setShowCreateLeadModal(false);
+      setLeadNameInput('');
+      setLeadEmailInput('');
+
+      // Mudar para aba Monday para visualizar o lead recém-criado
+      setActiveTab('monday');
+
+      alert(`Lead "${itemName}" cadastrado com sucesso no board atendimento!\nID: ${result.id}`);
+    } catch (err: any) {
+      console.error('❌ Erro ao criar lead (via Chat):', err);
+
+      let errorMessage = 'Erro desconhecido ao cadastrar lead no Monday.com';
+
+      if (err.message) {
+        errorMessage = err.message;
+      } else if (typeof err === 'string') {
+        errorMessage = err;
+      } else if (err.response?.data) {
+        const errorData = err.response.data;
+        if (errorData.error) {
+          errorMessage = errorData.error;
+          if (errorData.details) {
+            if (Array.isArray(errorData.details)) {
+              errorMessage +=
+                ': ' +
+                errorData.details.map((d: any) => d.message || JSON.stringify(d)).join(', ');
+            } else if (typeof errorData.details === 'string') {
+              errorMessage += ': ' + errorData.details;
+            }
+          }
+        } else {
+          errorMessage = JSON.stringify(errorData);
+        }
+      } else if (err.toString && err.toString() !== '[object Object]') {
+        errorMessage = err.toString();
+      }
+
+      setCreateLeadError(errorMessage);
+    } finally {
+      setCreatingLead(false);
+    }
+  };
+
   const getLeadContext = async (): Promise<string> => {
     if (!selectedPhone) return '';
 
@@ -565,6 +989,25 @@ Se sua resposta estiver ficando muito longa, resuma os pontos principais de form
                 </span>
               )}
             </div>
+            <button
+              className={`ai-toggle-button ${aiActive ? 'active' : ''} ${loadingAIStatus ? 'loading' : ''}`}
+              onClick={handleToggleAI}
+              disabled={loadingAIStatus || !selectedPhone}
+              title={aiActive ? 'IA Ativa - Clique para desativar' : 'IA Inativa - Clique para ativar'}
+            >
+              {loadingAIStatus ? (
+                <span className="ai-loading">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeDasharray="31.416" strokeDashoffset="23.562" fill="none" opacity="0.4"/>
+                  </svg>
+                </span>
+              ) : aiActive ? (
+                <span className="ai-icon">🤖</span>
+              ) : (
+                <span className="ai-icon">⚪</span>
+              )}
+              <span className="ai-label">{loadingAIStatus ? '...' : (aiActive ? 'ON' : 'OFF')}</span>
+            </button>
           </div>
         </div>
         <div className="chat-tabs">
@@ -611,6 +1054,20 @@ Se sua resposta estiver ficando muito longa, resuma os pontos principais de form
           </button>
         </div>
       </div>
+
+      {/* Botão de cadastro de lead - só aparece se não tem pulse_id (não está no Monday) */}
+      {activeTab === 'chat' && selectedPhone && !selectedPhone.pulse_id && (
+          <div className="chat-header-actions">
+            <button
+              onClick={handleOpenCreateLeadModal}
+              className="create-lead-button"
+              type="button"
+              style={{ margin: '8px 16px' }}
+            >
+              📝 Cadastrar Lead no Board Atendimento
+            </button>
+          </div>
+        )}
 
       {activeTab === 'chat' ? (
         <div className="chat-messages" ref={messagesContainerRef}>
@@ -734,7 +1191,7 @@ Se sua resposta estiver ficando muito longa, resuma os pontos principais de form
       ) : activeTab === 'documents' ? (
         <DocumentsTab selectedPhone={selectedPhone} />
       ) : (
-        <MondayTab phone={selectedPhone._id} />
+        <MondayTab phone={selectedPhone._id} messages={messages} pulseId={selectedPhone.pulse_id} />
       )}
 
       {/* Botões de prompts - apenas na aba chat */}
@@ -824,7 +1281,173 @@ Se sua resposta estiver ficando muito longa, resuma os pontos principais de form
           </button>
         </div>
       )}
-      
+
+      {/* Modal para cadastrar lead no Monday acionado a partir do chat */}
+      {showCreateLeadModal && (
+        <div
+          className="create-lead-modal-overlay"
+          onClick={() => {
+            if (!creatingLead) {
+              setShowCreateLeadModal(false);
+            }
+          }}
+        >
+          <div className="create-lead-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="create-lead-modal-header">
+              <h3>Cadastrar Lead no Board Atendimento</h3>
+              <button
+                className="create-lead-modal-close"
+                onClick={() => {
+                  if (!creatingLead) {
+                    setShowCreateLeadModal(false);
+                  }
+                }}
+                disabled={creatingLead}
+              >
+                ×
+              </button>
+            </div>
+            <div className="create-lead-modal-content">
+              <div className="create-lead-form-group">
+                <label htmlFor="lead-name">
+                  Nome do Lead <span style={{ color: '#e74c3c' }}>*</span>
+                  {aiLeadName && leadNameInput === aiLeadName && (
+                    <span className="ai-extracted-badge" title="Nome extraído automaticamente da conversa">
+                      🤖 Extraído da conversa
+                    </span>
+                  )}
+                </label>
+                <input
+                  id="lead-name"
+                  type="text"
+                  value={leadNameInput}
+                  onChange={(e) => setLeadNameInput(e.target.value)}
+                  placeholder="Digite o nome do lead"
+                  disabled={creatingLead}
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && leadNameInput.trim() && !creatingLead) {
+                      handleCreateLead();
+                    }
+                  }}
+                />
+              </div>
+              <div className="create-lead-form-group">
+                <label htmlFor="lead-email">Email (opcional)</label>
+                <input
+                  id="lead-email"
+                  type="email"
+                  value={leadEmailInput}
+                  onChange={(e) => setLeadEmailInput(e.target.value)}
+                  placeholder="Digite o email do lead"
+                  disabled={creatingLead}
+                />
+              </div>
+              {/* Colunas de status / etiquetas / qualidade / origem */}
+              <div className="create-lead-form-group">
+                <label htmlFor="lead-status">Status</label>
+                <select
+                  id="lead-status"
+                  value={statusValue}
+                  onChange={(e) => setStatusValue(e.target.value)}
+                  disabled={creatingLead || !statusOptions['status'] || statusOptions['status'].length === 0}
+                >
+                  <option value="">Selecione...</option>
+                  {(statusOptions['status'] || []).map((opt) => (
+                    <option key={opt} value={opt}>
+                      {opt}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="create-lead-form-group">
+                <label htmlFor="lead-status-1">Etiquetas</label>
+                <select
+                  id="lead-status-1"
+                  value={status1Value}
+                  onChange={(e) => setStatus1Value(e.target.value)}
+                  disabled={creatingLead || !statusOptions['status_1'] || statusOptions['status_1'].length === 0}
+                >
+                  <option value="">Selecione...</option>
+                  {(statusOptions['status_1'] || []).map((opt) => (
+                    <option key={opt} value={opt}>
+                      {opt}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="create-lead-form-group">
+                <label htmlFor="lead-status-14">Qualidade</label>
+                <select
+                  id="lead-status-14"
+                  value={status14Value}
+                  onChange={(e) => setStatus14Value(e.target.value)}
+                  disabled={creatingLead || !statusOptions['status_14'] || statusOptions['status_14'].length === 0}
+                >
+                  <option value="">Selecione...</option>
+                  {(statusOptions['status_14'] || []).map((opt) => (
+                    <option key={opt} value={opt}>
+                      {opt}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="create-lead-form-group">
+                <label htmlFor="lead-status-152">Origem</label>
+                <select
+                  id="lead-status-152"
+                  value={status152Value}
+                  onChange={(e) => setStatus152Value(e.target.value)}
+                  disabled={creatingLead || !statusOptions['status_152'] || statusOptions['status_152'].length === 0}
+                >
+                  <option value="">Selecione...</option>
+                  {(statusOptions['status_152'] || []).map((opt) => (
+                    <option key={opt} value={opt}>
+                      {opt}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {selectedPhone && (
+                <div className="create-lead-form-group">
+                  <label>Telefone</label>
+                  <input
+                    type="text"
+                    value={selectedPhone._id}
+                    disabled
+                    className="create-lead-input-disabled"
+                  />
+                </div>
+              )}
+              {createLeadError && (
+                <div className="create-lead-error-message">
+                  ⚠️ {createLeadError}
+                </div>
+              )}
+            </div>
+            <div className="create-lead-modal-actions">
+              <button
+                className="create-lead-cancel-button"
+                onClick={() => {
+                  if (!creatingLead) {
+                    setShowCreateLeadModal(false);
+                  }
+                }}
+                disabled={creatingLead}
+              >
+                Cancelar
+              </button>
+              <button
+                className="create-lead-submit-button"
+                onClick={handleCreateLead}
+                disabled={!leadNameInput.trim() || creatingLead}
+              >
+                {creatingLead ? 'Cadastrando...' : 'Cadastrar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

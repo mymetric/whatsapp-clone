@@ -162,6 +162,70 @@ function loadGrokApiKey() {
   return apiKey;
 }
 
+/**
+ * DEBUG: Endpoint para buscar apenas as colunas de um board
+ */
+app.get('/api/contencioso/columns', async (req, res) => {
+  const boardId = Number(req.query.boardId) || 607533664;
+  const apiKey = loadMondayApiKey();
+
+  if (!apiKey) {
+    return res.status(500).json({ error: 'Monday API key não configurada' });
+  }
+
+  const query = `
+    query ($boardId: [ID!]) {
+      boards (ids: $boardId) {
+        id
+        name
+        columns {
+          id
+          title
+          type
+          settings_str
+        }
+      }
+    }
+  `;
+
+  try {
+    console.log('🔍 [DEBUG] Buscando apenas colunas do board:', boardId);
+
+    const response = await axios.post(
+      'https://api.monday.com/v2',
+      { 
+        query, 
+        variables: { boardId: [String(boardId)] } 
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: apiKey,
+        },
+      },
+    );
+
+    const data = response.data;
+
+    if (data?.errors?.length) {
+      console.error('❌ [DEBUG] Monday GraphQL errors:', data.errors);
+      return res.status(502).json({ error: 'Erro do Monday GraphQL', details: data.errors });
+    }
+
+    const columns = data?.data?.boards?.[0]?.columns || [];
+    
+    console.log(`✅ [DEBUG] ${columns.length} colunas encontradas`);
+    columns.forEach((col, idx) => {
+      console.log(`   [${idx + 1}] "${col.id}" → "${col.title}" (${col.type})`);
+    });
+
+    return res.json(columns);
+  } catch (err) {
+    console.error('❌ [DEBUG] Erro ao buscar colunas:', err.response?.data || err.message);
+    return res.status(500).json({ error: 'Erro ao buscar colunas' });
+  }
+});
+
 app.get('/api/contencioso', async (req, res) => {
   const boardId = Number(req.query.boardId) || 632454515;
   const apiKey = loadMondayApiKey();
@@ -180,6 +244,12 @@ app.get('/api/contencioso', async (req, res) => {
       boards (ids: $boardId) {
         id
         name
+        columns {
+          id
+          title
+          type
+          settings_str
+        }
         items_page (limit: $limit) {
           cursor
           items {
@@ -190,6 +260,11 @@ app.get('/api/contencioso', async (req, res) => {
               id
               text
               type
+              column {
+                id
+                title
+                type
+              }
             }
           }
         }
@@ -202,6 +277,12 @@ app.get('/api/contencioso', async (req, res) => {
       boards (ids: $boardId) {
         id
         name
+        columns {
+          id
+          title
+          type
+          settings_str
+        }
         items_page (limit: $limit, cursor: $cursor) {
           cursor
           items {
@@ -212,6 +293,11 @@ app.get('/api/contencioso', async (req, res) => {
               id
               text
               type
+              column {
+                id
+                title
+                type
+              }
             }
           }
         }
@@ -219,7 +305,7 @@ app.get('/api/contencioso', async (req, res) => {
     }
   `;
 
-  try {
+    try {
     console.log('📄 [server] Buscando itens do board no Monday (com paginação):', boardId);
 
     const allItems = [];
@@ -227,6 +313,7 @@ app.get('/api/contencioso', async (req, res) => {
     let cursor = null;
     let page = 0;
     const MAX_PAGES = 200; // safety guard (200 * 500 = 100k itens)
+    let boardColumns = null;
 
     while (page < MAX_PAGES) {
       page += 1;
@@ -260,10 +347,16 @@ app.get('/api/contencioso', async (req, res) => {
 
       const boards = data?.data?.boards;
       if (!Array.isArray(boards) || boards.length === 0) {
-        return res.json([]);
+        return res.json({ columns: [], items: [] });
       }
 
       const board = boards[0];
+      
+      // Salvar colunas apenas na primeira página
+      if (!boardColumns && board.columns && Array.isArray(board.columns)) {
+        boardColumns = board.columns;
+      }
+      
       const pageObj = board?.items_page;
       const items = Array.isArray(pageObj?.items) ? pageObj.items : [];
 
@@ -280,8 +373,10 @@ app.get('/api/contencioso', async (req, res) => {
       if (!cursor) break;
     }
 
-    console.log(`✅ [server] Total de itens retornados: ${allItems.length}`);
-    return res.json(allItems);
+    return res.json({
+      columns: boardColumns || [],
+      items: allItems
+    });
   } catch (err) {
     console.error('❌ [server] Erro ao chamar API do Monday:', err.response?.data || err.message);
     const status = err.response?.status || 500;
@@ -376,6 +471,227 @@ app.get('/api/contencioso/updates', async (req, res) => {
     const status = err.response?.status || 500;
     return res.status(status).json({
       error: 'Erro ao consultar updates do item no Monday',
+      details: err.response?.data || err.message,
+    });
+  }
+});
+
+/**
+ * Busca itens e updates do Monday por número de telefone
+ * GET /api/monday/updates-by-phone?phone=+5511999999999&boardId=632454515
+ */
+app.get('/api/monday/updates-by-phone', async (req, res) => {
+  const apiKey = loadMondayApiKey();
+  const phone = req.query.phone;
+  const boardId = req.query.boardId || '607533664'; // Board padrão de leads
+
+  if (!apiKey) {
+    return res.status(500).json({ error: 'Monday API key não configurada no .env (MONDAY_API_KEY)' });
+  }
+
+  if (!phone) {
+    return res.status(400).json({ error: 'phone é obrigatório' });
+  }
+
+  // Limpar o telefone para busca (remover caracteres especiais)
+  const cleanPhone = phone.replace(/[^0-9]/g, '');
+  const phoneVariations = [
+    phone,
+    cleanPhone,
+    `+${cleanPhone}`,
+    cleanPhone.replace(/^55/, ''), // Sem código do país
+  ];
+
+  // Query para buscar itens do board (sem updates - será buscado separadamente)
+  const firstPageQuery = `
+    query ($boardId: [ID!], $limit: Int!) {
+      boards (ids: $boardId) {
+        items_page (limit: $limit) {
+          cursor
+          items {
+            id
+            name
+            column_values {
+              id
+              text
+              type
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  const nextPageQuery = `
+    query ($boardId: [ID!], $limit: Int!, $cursor: String!) {
+      boards (ids: $boardId) {
+        items_page (limit: $limit, cursor: $cursor) {
+          cursor
+          items {
+            id
+            name
+            column_values {
+              id
+              text
+              type
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  // Query para buscar updates de um item específico
+  const updatesQuery = `
+    query ($itemId: [ID!]) {
+      items (ids: $itemId) {
+        id
+        name
+        updates {
+          id
+          body
+          created_at
+          creator {
+            id
+            name
+            email
+          }
+        }
+      }
+    }
+  `;
+
+  try {
+    console.log('📞 [server] Buscando itens no Monday por telefone:', phone);
+
+    const PAGE_LIMIT = 500;
+    let allItems = [];
+    let cursor = null;
+    let pageNumber = 0;
+
+    // Buscar todos os itens com paginação
+    while (true) {
+      pageNumber++;
+      const query = cursor ? nextPageQuery : firstPageQuery;
+      const variables = cursor
+        ? { boardId: [String(boardId)], limit: PAGE_LIMIT, cursor }
+        : { boardId: [String(boardId)], limit: PAGE_LIMIT };
+
+      console.log(`📞 [server] Buscando página ${pageNumber}...`);
+
+      const itemsResponse = await axios.post(
+        'https://api.monday.com/v2',
+        { query, variables },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: apiKey,
+          },
+        },
+      );
+
+      const itemsData = itemsResponse.data;
+
+      if (itemsData?.errors?.length) {
+        console.error('❌ [server] Monday GraphQL errors (items):', JSON.stringify(itemsData.errors, null, 2));
+        return res.status(502).json({ error: 'Erro do Monday GraphQL', details: itemsData.errors });
+      }
+
+      const boards = itemsData?.data?.boards;
+      if (!Array.isArray(boards) || boards.length === 0) {
+        break;
+      }
+
+      const itemsPage = boards[0]?.items_page;
+      const pageItems = itemsPage?.items || [];
+      allItems = allItems.concat(pageItems);
+
+      console.log(`📞 [server] Página ${pageNumber}: ${pageItems.length} itens (total: ${allItems.length})`);
+
+      // Se não há mais páginas, sair do loop
+      cursor = itemsPage?.cursor;
+      if (!cursor || pageItems.length < PAGE_LIMIT) {
+        break;
+      }
+    }
+
+    if (allItems.length === 0) {
+      console.warn('⚠️ [server] Nenhum item encontrado no board');
+      return res.json(null);
+    }
+
+    console.log(`📞 [server] Total de itens carregados: ${allItems.length}`);
+
+    // Filtrar itens que têm o telefone em alguma coluna
+    const matchingItems = allItems.filter((item) => {
+      const phoneColumns = item.column_values?.filter((col) =>
+        col.text && phoneVariations.some((pv) => col.text.includes(pv) || col.text.replace(/[^0-9]/g, '').includes(cleanPhone))
+      );
+      return phoneColumns && phoneColumns.length > 0;
+    });
+
+    if (matchingItems.length === 0) {
+      console.log('📞 [server] Nenhum item encontrado para telefone:', phone);
+      return res.json(null);
+    }
+
+    console.log(`📞 [server] Encontrados ${matchingItems.length} item(s), buscando updates...`);
+
+    // Buscar updates para cada item encontrado
+    const itemsWithUpdates = await Promise.all(
+      matchingItems.map(async (item) => {
+        try {
+          const updatesResponse = await axios.post(
+            'https://api.monday.com/v2',
+            {
+              query: updatesQuery,
+              variables: { itemId: [String(item.id)] },
+            },
+            {
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: apiKey,
+              },
+            },
+          );
+
+          const updatesData = updatesResponse.data;
+          const itemWithUpdates = updatesData?.data?.items?.[0];
+
+          return {
+            id: item.id,
+            name: item.name,
+            updates: Array.isArray(itemWithUpdates?.updates) ? itemWithUpdates.updates : [],
+          };
+        } catch (err) {
+          console.warn(`⚠️ [server] Erro ao buscar updates do item ${item.id}:`, err.message);
+          return {
+            id: item.id,
+            name: item.name,
+            updates: [],
+          };
+        }
+      })
+    );
+
+    // Formatar resposta no mesmo formato que getMondayUpdates espera
+    const result = {
+      _name: matchingItems[0]?.name || 'Lead',
+      _id: phone,
+      _createTime: new Date().toISOString(),
+      _updateTime: new Date().toISOString(),
+      monday_updates: {
+        items: itemsWithUpdates,
+      },
+    };
+
+    console.log(`✅ [server] Retornando ${itemsWithUpdates.length} item(s) para telefone ${phone}`);
+    return res.json(result);
+  } catch (err) {
+    console.error('❌ [server] Erro ao buscar updates por telefone no Monday:', err.response?.data || err.message);
+    const status = err.response?.status || 500;
+    return res.status(status).json({
+      error: 'Erro ao consultar Monday por telefone',
       details: err.response?.data || err.message,
     });
   }
@@ -820,6 +1136,102 @@ app.post('/api/monday/update', async (req, res) => {
     const status = err.response?.status || 500;
     return res.status(status).json({
       error: 'Erro ao criar update no Monday',
+      details: err.response?.data || err.message,
+    });
+  }
+});
+
+/**
+ * Cria um item (lead) em um board do Monday
+ */
+app.post('/api/monday/create-item', async (req, res) => {
+  const apiKey = loadMondayApiKey();
+  const { boardId, itemName, columnValues } = req.body || {};
+
+  if (!apiKey) {
+    return res.status(500).json({ error: 'Monday API key não configurada no .env (MONDAY_API_KEY)' });
+  }
+
+  if (!boardId) {
+    return res.status(400).json({ error: 'boardId é obrigatório' });
+  }
+
+  if (!itemName || !itemName.trim()) {
+    return res.status(400).json({ error: 'itemName é obrigatório' });
+  }
+
+  // Construir a string de column_values no formato JSON do Monday
+  // O Monday aceita column_values como JSON string, mesmo que vazio
+  let columnValuesJson = '{}';
+  if (columnValues && typeof columnValues === 'object' && Object.keys(columnValues).length > 0) {
+    columnValuesJson = JSON.stringify(columnValues);
+  }
+
+  const mutation = `
+    mutation ($boardId: ID!, $itemName: String!, $columnValues: JSON!) {
+      create_item (board_id: $boardId, item_name: $itemName, column_values: $columnValues) {
+        id
+        name
+        board {
+          id
+          name
+        }
+      }
+    }
+  `;
+
+  try {
+    console.log('📝 [server] Criando item no Monday:', { boardId, itemName, columnValuesJson });
+    console.log('📝 [server] columnValues recebidos (raw):', JSON.stringify(columnValues, null, 2));
+    console.log('📝 [server] columnValuesJson (string):', columnValuesJson);
+
+    const variables = {
+      boardId: String(boardId),
+      itemName: String(itemName).trim(),
+      columnValues: columnValuesJson,
+    };
+    
+    console.log('📝 [server] Variables para GraphQL:', JSON.stringify(variables, null, 2));
+
+    const response = await axios.post(
+      'https://api.monday.com/v2',
+      {
+        query: mutation,
+        variables,
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: apiKey,
+        },
+      },
+    );
+
+    const data = response.data;
+
+    if (data?.errors?.length) {
+      console.error('❌ [server] Monday GraphQL errors (create_item):', JSON.stringify(data.errors, null, 2));
+      return res.status(502).json({ error: 'Erro do Monday GraphQL (create_item)', details: data.errors });
+    }
+
+    const item = data?.data?.create_item;
+    if (!item || !item.id) {
+      console.warn('⚠️ [server] Resposta do Monday sem ID de item');
+      return res.status(502).json({ error: 'Resposta inválida do Monday' });
+    }
+
+    console.log(`✅ [server] Item criado com sucesso: ${item.id}`);
+    return res.json({ 
+      id: item.id,
+      name: item.name,
+      boardId: item.board?.id,
+      boardName: item.board?.name
+    });
+  } catch (err) {
+    console.error('❌ [server] Erro ao criar item no Monday:', err.response?.data || err.message);
+    const status = err.response?.status || 500;
+    return res.status(status).json({
+      error: 'Erro ao criar item no Monday',
       details: err.response?.data || err.message,
     });
   }

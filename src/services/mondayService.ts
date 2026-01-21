@@ -1,3 +1,8 @@
+// ============================================================================
+// INTERFACES - Tipos de dados do Monday.com
+// ============================================================================
+
+// Updates (comentários/atualizações)
 interface MondayUpdate {
   id: string;
   body: string;
@@ -7,34 +12,6 @@ interface MondayUpdate {
     name: string;
     email: string;
   } | null;
-}
-
-// Tipos para itens genéricos de board (ex: contencioso)
-interface MondayColumnValue {
-  id: string;
-  text: string;
-  type?: string;
-}
-
-interface MondayBoardItem {
-  id: string;
-  name: string;
-  created_at?: string;
-  column_values: MondayColumnValue[];
-}
-
-interface MondayBoard {
-  id: string;
-  name: string;
-  items_page: {
-    items: MondayBoardItem[];
-  };
-}
-
-interface MondayBoardResponse {
-  data: {
-    boards: MondayBoard[];
-  };
 }
 
 interface MondayItem {
@@ -53,45 +30,70 @@ interface MondayUpdatesResponse {
   };
 }
 
+// Board, colunas e valores
+interface MondayColumnValue {
+  id: string;
+  text: string;
+  type?: string;
+  column?: {
+    id: string;
+    title: string;
+    type?: string;
+  };
+}
+
+interface MondayColumn {
+  id: string;
+  title: string;
+  type?: string;
+  // JSON string com configurações da coluna (inclui labels para status)
+  settings_str?: string;
+}
+
+interface MondayBoardItem {
+  id: string;
+  name: string;
+  created_at?: string;
+  column_values: MondayColumnValue[];
+}
+
+interface MondayBoardItemsResponse {
+  columns: MondayColumn[];
+  items: MondayBoardItem[];
+}
+
+interface MondayBoard {
+  id: string;
+  name: string;
+  items_page: {
+    items: MondayBoardItem[];
+  };
+}
+
+interface MondayBoardResponse {
+  data: {
+    boards: MondayBoard[];
+  };
+}
+
+// ============================================================================
+// MONDAY SERVICE - Serviço para interação com Monday.com
+// ============================================================================
+
 class MondayService {
-  private baseUrl = 'https://n8n.rosenbaum.adv.br/webhook/api/monday_updates';
-  private apiKey: string | null = null;
-
-  private async loadApiKey(): Promise<string> {
-    if (this.apiKey) return this.apiKey;
-    
+  // --------------------------------------------------------------------------
+  // Métodos públicos - Buscar updates por telefone
+  // --------------------------------------------------------------------------
+  async getMondayUpdates(phone: string, boardId?: string): Promise<MondayUpdatesResponse | null> {
     try {
-      const apiKey = process.env.REACT_APP_API_KEY;
-      
-      if (!apiKey) {
-        throw new Error('REACT_APP_API_KEY não encontrada no .env');
-      }
-      
-      this.apiKey = apiKey;
-      console.log('✅ Monday: API key carregada do .env com sucesso');
-      return this.apiKey!; // Non-null assertion since we just assigned it
-    } catch (error) {
-      console.error('❌ Monday: Erro ao carregar API key do .env:', error);
-      // Fallback para desenvolvimento
-      this.apiKey = 'sua-api-key-aqui';
-      return this.apiKey!; // Non-null assertion since we just assigned it
-    }
-  }
+      const url = `/api/monday/updates-by-phone?phone=${encodeURIComponent(phone)}${boardId ? `&boardId=${boardId}` : ''}`;
 
-  async getMondayUpdates(phone: string): Promise<MondayUpdatesResponse | null> {
-    try {
-      const cleanPhone = phone.replace('+', '');
-      const url = `${this.baseUrl}?phone=%2B${cleanPhone}`;
-      const apiKey = await this.loadApiKey();
-      
       console.log('🔄 Buscando dados do Monday para:', phone);
       console.log('📞 URL:', url);
-      
+
       const response = await fetch(url, {
         method: 'GET',
         headers: {
-          'User-Agent': 'insomnia/11.5.0',
-          'apikey': apiKey,
           'Content-Type': 'application/json',
         },
       });
@@ -103,18 +105,17 @@ class MondayService {
 
       const data = await response.json();
       console.log('✅ Dados do Monday recebidos:', data);
-      
-      // A API retorna um array, pegamos o primeiro item
-      if (Array.isArray(data) && data.length > 0) {
-        return data[0];
-      }
-      
-      return null;
+
+      return data;
     } catch (error) {
       console.error('❌ Erro ao buscar dados do Monday:', error);
       return null;
     }
   }
+
+  // --------------------------------------------------------------------------
+  // Métodos públicos - Buscar boards e itens
+  // --------------------------------------------------------------------------
 
   /**
    * Busca as updates de um item específico (por ID) do board de contencioso.
@@ -160,11 +161,20 @@ class MondayService {
    * via backend local (server/server.js), evitando CORS e exposição da API key.
    */
   async getBoardItems(boardId: number | string): Promise<MondayBoardItem[]> {
+    const result = await this.getBoardItemsWithColumns(boardId);
+    return result.items;
+  }
+
+  /**
+   * Busca itens e colunas de um board específico do Monday
+   * via backend local (server/server.js), evitando CORS e exposição da API key.
+   */
+  async getBoardItemsWithColumns(boardId: number | string): Promise<MondayBoardItemsResponse> {
     // Chamada para o backend local (Express) em /api/contencioso,
     // que por sua vez fala com a API do Monday.
     const url = `/api/contencioso?boardId=${boardId}`;
 
-    console.log('📄 Monday: Buscando itens do board via backend local', boardId, url);
+    console.log('📄 Monday: Buscando itens e colunas do board via backend local', boardId, url);
 
     const response = await fetch(url, {
       method: 'GET',
@@ -180,21 +190,29 @@ class MondayService {
     }
 
     const data = await response.json();
-    console.log('✅ Monday: Resposta do board recebida do backend local:', data);
-
-    // Backend já retorna um array de itens no formato esperado
-    if (Array.isArray(data)) {
-      return data as MondayBoardItem[];
+    
+    // Verificar se retorna novo formato (objeto com columns e items)
+    if (data && typeof data === 'object' && 'columns' in data && 'items' in data) {
+      return data as MondayBoardItemsResponse;
     }
 
+    // Compatibilidade com formato antigo (apenas array de itens)
+    if (Array.isArray(data)) {
+      return { columns: [], items: data as MondayBoardItem[] };
+    }
+
+    // Formato com items dentro do objeto
     if (data && Array.isArray(data.items)) {
-      return data.items as MondayBoardItem[];
+      return { columns: data.columns || [], items: data.items as MondayBoardItem[] };
     }
 
     console.warn('⚠️ Monday: Formato de resposta inesperado para itens do board (backend local)');
-    // Retorna array vazio apenas se o formato for inesperado (não é erro HTTP)
-    return [];
+    return { columns: [], items: [] };
   }
+
+  // --------------------------------------------------------------------------
+  // Métodos públicos - Utilitários de formatação
+  // --------------------------------------------------------------------------
 
   // Função para formatar HTML do Monday para texto limpo
   formatUpdateBody(htmlBody: string): string {
@@ -223,6 +241,10 @@ class MondayService {
       minute: '2-digit'
     });
   }
+
+  // --------------------------------------------------------------------------
+  // Métodos públicos - Criar updates e itens
+  // --------------------------------------------------------------------------
 
   /**
    * Cria um update (comentário) em um item do Monday
@@ -262,7 +284,62 @@ class MondayService {
       throw error;
     }
   }
+
+  /**
+   * Cria um item (lead) em um board do Monday
+   * via backend local para não expor a API key
+   */
+  async createItem(boardId: number | string, itemName: string, columnValues?: Record<string, any>): Promise<{ id: string; name: string; boardId?: string; boardName?: string }> {
+    if (!boardId || !itemName) {
+      throw new Error('boardId e itemName são obrigatórios');
+    }
+
+    try {
+      const url = `/api/monday/create-item`;
+      console.log('📝 Monday: Criando item via backend local', { boardId, itemName });
+      console.log('📝 Column values sendo enviados:', JSON.stringify(columnValues, null, 2));
+
+      const payload = {
+        boardId: String(boardId),
+        itemName: itemName.trim(),
+        columnValues: columnValues || {},
+      };
+      console.log('📝 Payload completo:', JSON.stringify(payload, null, 2));
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Erro desconhecido' }));
+        console.error('❌ Erro HTTP ao criar item no Monday:', response.status, errorData);
+        throw new Error(errorData.error || `Erro HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('✅ Monday: Item criado com sucesso:', data);
+      return data;
+    } catch (error) {
+      console.error('❌ Monday: Erro ao criar item:', error);
+      throw error;
+    }
+  }
 }
 
+// ============================================================================
+// EXPORTS
+// ============================================================================
+
 export const mondayService = new MondayService();
-export type { MondayUpdate, MondayItem, MondayUpdatesResponse, MondayBoardItem };
+export type { 
+  MondayUpdate, 
+  MondayItem, 
+  MondayUpdatesResponse, 
+  MondayBoardItem, 
+  MondayColumn, 
+  MondayBoardItemsResponse 
+};

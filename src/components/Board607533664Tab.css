@@ -1,0 +1,453 @@
+.board-tab {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #f8f9fa;
+  overflow: hidden;
+}
+
+.board-header {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 16px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  row-gap: 12px;
+  column-gap: 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  flex-shrink: 0;
+}
+
+.board-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.board-icon {
+  font-size: 20px;
+}
+
+.board-title h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.board-count {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.board-last-update {
+  background: rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.9);
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.board-updating {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.updating-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top: 2px solid white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.board-search {
+  flex: 1 1 200px;
+  max-width: 300px;
+}
+
+.board-search input {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: none;
+  outline: none;
+  font-size: 14px;
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
+.board-search input::placeholder {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.board-search input:focus {
+  background: rgba(255, 255, 255, 0.25);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.9);
+}
+
+.filter-button,
+.columns-button,
+.refresh-button {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 6px;
+  padding: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.filter-button:hover,
+.columns-button:hover,
+.refresh-button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.3);
+  transform: translateY(-1px);
+}
+
+.filter-button.active {
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.filter-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 8px;
+  height: 8px;
+  background: #ff6b6b;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+}
+
+.clear-filters-button {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 13px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.clear-filters-button:hover {
+  background: rgba(255, 92, 92, 0.3);
+  border-color: rgba(255, 92, 92, 0.5);
+}
+
+.refresh-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.refresh-button svg.spinning {
+  animation: spin 1s linear infinite;
+}
+
+.board-content {
+  flex: 1;
+  overflow: auto;
+  padding: 20px;
+  background: white;
+}
+
+.board-table-container {
+  overflow-x: auto;
+  border-radius: 8px;
+  border: 1px solid #e9ecef;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.board-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: white;
+  min-width: 600px;
+}
+
+.board-table thead {
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  border-bottom: 2px solid #dee2e6;
+}
+
+.board-table th {
+  padding: 12px 16px;
+  text-align: left;
+  font-weight: 600;
+  font-size: 13px;
+  color: #495057;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  background: inherit;
+  z-index: 1;
+  height: 50px;
+}
+
+.board-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.2s;
+}
+
+.board-table th.sortable:hover {
+  background: linear-gradient(135deg, #e9ecef 0%, #dee2e6 100%);
+}
+
+.board-table th.sortable.sorted {
+  background: linear-gradient(135deg, #e0e3e7 0%, #d0d4d8 100%);
+}
+
+.th-content {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: space-between;
+}
+
+.sort-icon {
+  font-size: 14px;
+  color: #667eea;
+  font-weight: bold;
+}
+
+.filter-row th {
+  padding: 8px 12px;
+  background: #f8f9fa;
+  border-bottom: 2px solid #dee2e6;
+  height: auto;
+}
+
+.column-filter-input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: normal;
+  text-transform: none;
+  letter-spacing: normal;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.column-filter-input:focus {
+  border-color: #667eea;
+  box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.1);
+}
+
+.column-filter-input::placeholder {
+  color: #adb5bd;
+  font-style: italic;
+}
+
+.board-table th.col-name {
+  min-width: 200px;
+  max-width: 300px;
+}
+
+.board-table th.col-value {
+  min-width: 150px;
+}
+
+.board-table th.col-date {
+  min-width: 150px;
+  text-align: center;
+}
+
+
+.board-table tbody tr {
+  border-bottom: 1px solid #f1f3f4;
+  transition: all 0.2s ease;
+  height: 60px;
+}
+
+.board-table tbody tr.clickable {
+  cursor: pointer;
+}
+
+.board-table tbody tr.clickable:hover {
+  background: #f0f4ff;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.1);
+  transform: translateY(-1px);
+}
+
+.board-table tbody tr:last-child {
+  border-bottom: none;
+}
+
+.board-table td {
+  padding: 12px 16px;
+  font-size: 14px;
+  color: #212529;
+  vertical-align: middle;
+  height: 60px;
+  max-height: 60px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.board-table td.col-name {
+  font-weight: 500;
+}
+
+.board-table td.col-value {
+  word-wrap: break-word;
+  max-width: 300px;
+  overflow-wrap: break-word;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.board-table td.col-date {
+  text-align: center;
+  color: #6c757d;
+  font-size: 12px;
+}
+
+.board-empty-search {
+  padding: 40px;
+  text-align: center;
+  color: #6c757d;
+}
+
+/* Estados de loading e erro */
+.board-loading,
+.board-error,
+.board-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  text-align: center;
+  padding: 40px 20px;
+}
+
+.loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid #e9ecef;
+  border-top: 3px solid #667eea;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-bottom: 16px;
+}
+
+.board-loading p {
+  color: #6c757d;
+  font-size: 16px;
+  margin: 0;
+}
+
+.error-icon,
+.empty-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+  opacity: 0.6;
+}
+
+.board-error h3,
+.board-empty h3 {
+  margin: 0 0 8px 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: #212529;
+}
+
+.board-error p,
+.board-empty p {
+  margin: 0 0 20px 0;
+  color: #6c757d;
+  font-size: 14px;
+  max-width: 300px;
+  line-height: 1.5;
+}
+
+.retry-button {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 10px 20px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+}
+
+.retry-button:hover {
+  background: linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.retry-button:active {
+  transform: translateY(0);
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Responsividade */
+@media (max-width: 768px) {
+  .board-header {
+    padding: 12px 16px;
+  }
+  
+  .board-title h2 {
+    font-size: 16px;
+  }
+  
+  .board-content {
+    padding: 12px;
+  }
+
+  .board-table {
+    font-size: 12px;
+  }
+
+  .board-table th,
+  .board-table td {
+    padding: 8px 12px;
+  }
+
+  .board-table th.col-name {
+    min-width: 150px;
+  }
+
+  .board-table th.col-value {
+    min-width: 100px;
+  }
+}

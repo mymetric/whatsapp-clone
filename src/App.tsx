@@ -7,6 +7,7 @@ import Login from './components/Login';
 import Header from './components/Header';
 import PromptsManager from './components/PromptsManager';
 import ContenciosoTab from './components/ContenciosoTab';
+import Board607533664Tab from './components/Board607533664Tab';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { Phone, Message } from './types';
 import { phoneService } from './services/api';
@@ -21,6 +22,7 @@ const AppContent: React.FC = () => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showPromptsPage, setShowPromptsPage] = useState(false);
   const [showContenciosoPage, setShowContenciosoPage] = useState(false);
+  const [showBoard607533664Page, setShowBoard607533664Page] = useState(false);
   const { isAuthenticated } = useAuth();
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const lastActivityRef = useRef<Date>(new Date());
@@ -122,6 +124,12 @@ const AppContent: React.FC = () => {
     setSelectedPhone(phone);
   };
 
+  const handleWhatsAppClick = () => {
+    setShowPromptsPage(false);
+    setShowContenciosoPage(false);
+    setShowBoard607533664Page(false);
+  };
+
   if (!isAuthenticated) {
     return <Login />;
   }
@@ -146,10 +154,18 @@ const AppContent: React.FC = () => {
     return (
       <div className="app fade-in">
         <Header
+          activeTab="prompts"
+          onWhatsAppClick={handleWhatsAppClick}
           onPromptsClick={() => setShowPromptsPage(false)}
           onContenciosoClick={() => {
             setShowPromptsPage(false);
             setShowContenciosoPage(true);
+            setShowBoard607533664Page(false);
+          }}
+          onBoard607533664Click={() => {
+            setShowPromptsPage(false);
+            setShowContenciosoPage(false);
+            setShowBoard607533664Page(true);
           }}
         />
         <div className="prompts-page-container">
@@ -163,8 +179,15 @@ const AppContent: React.FC = () => {
     return (
       <div className="app fade-in">
         <Header
+          activeTab="contencioso"
+          onWhatsAppClick={handleWhatsAppClick}
           onPromptsClick={() => setShowPromptsPage(true)}
           onContenciosoClick={() => setShowContenciosoPage(false)}
+          onBoard607533664Click={() => {
+            setShowPromptsPage(false);
+            setShowContenciosoPage(false);
+            setShowBoard607533664Page(true);
+          }}
         />
         <div className="prompts-page-container">
           <ContenciosoTab />
@@ -173,11 +196,35 @@ const AppContent: React.FC = () => {
     );
   }
 
+  if (showBoard607533664Page) {
+    return (
+      <div className="app fade-in">
+        <Header
+          activeTab="atendimento"
+          onWhatsAppClick={handleWhatsAppClick}
+          onPromptsClick={() => setShowPromptsPage(true)}
+          onContenciosoClick={() => {
+            setShowPromptsPage(false);
+            setShowContenciosoPage(true);
+            setShowBoard607533664Page(false);
+          }}
+          onBoard607533664Click={() => setShowBoard607533664Page(false)}
+        />
+        <div className="prompts-page-container">
+          <Board607533664Tab />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app fade-in">
       <Header
+        activeTab="whatsapp"
+        onWhatsAppClick={handleWhatsAppClick}
         onPromptsClick={() => setShowPromptsPage(true)}
         onContenciosoClick={() => setShowContenciosoPage(true)}
+        onBoard607533664Click={() => setShowBoard607533664Page(true)}
       />
       <div className="app-main">
         <ChatList

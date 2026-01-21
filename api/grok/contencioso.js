@@ -75,14 +75,29 @@ de forma clara, objetiva e com foco prático para advogados.`;
       console.log(`   - filename: ${file.filename || 'NÃO DEFINIDO'}`);
       console.log(`   - mimeType: ${file.mimeType || 'NÃO DEFINIDO'}`);
       console.log(`   - base64 presente: ${!!file.base64}`);
+      console.log(`   - base64 length: ${file.base64 ? file.base64.length : 0} caracteres`);
       
       if (!file.base64) {
         console.error(`❌ Arquivo ${file.filename} não tem base64!`);
         continue;
       }
       
+      if (!file.filename) {
+        console.warn(`⚠️ Arquivo sem nome, tentando processar mesmo assim...`);
+      }
+      
       try {
+        console.log(`   🔍 Chamando extractTextFromFile para ${file.filename}...`);
         const text = await extractTextFromFile(file);
+        console.log(`   📝 Resultado da extração:`, {
+          isNull: text === null,
+          isUndefined: text === undefined,
+          type: typeof text,
+          length: text ? text.length : 0,
+          trimmedLength: text ? text.trim().length : 0,
+          preview: text ? text.substring(0, 200) + '...' : 'N/A'
+        });
+        
         if (text && text.trim().length > 0) {
           extractedTexts.push({
             filename: file.filename || `arquivo_${i + 1}`,
@@ -90,21 +105,38 @@ de forma clara, objetiva e com foco prático para advogados.`;
             size: text.length,
           });
           console.log(`✅ Texto extraído de ${file.filename}: ${text.length} caracteres`);
+          console.log(`   📝 Primeiros 300 caracteres: ${text.substring(0, 300)}...`);
         } else {
           console.warn(`⚠️ Não foi possível extrair texto de ${file.filename} (texto vazio ou null)`);
+          console.warn(`   - text é null: ${text === null}`);
+          console.warn(`   - text é undefined: ${text === undefined}`);
+          console.warn(`   - text.trim().length: ${text ? text.trim().length : 'N/A'}`);
         }
       } catch (extractErr) {
         console.error(`❌ Erro ao extrair texto de ${file.filename}:`, extractErr.message);
+        console.error(`❌ Stack:`, extractErr.stack);
       }
     }
     
     console.log(`\n✅ Extração concluída: ${extractedTexts.length} de ${downloadedFiles.length} arquivo(s) processado(s) com sucesso`);
+    if (extractedTexts.length === 0 && downloadedFiles.length > 0) {
+      console.error(`❌ ATENÇÃO: Nenhum texto foi extraído dos ${downloadedFiles.length} arquivo(s) enviado(s)!`);
+    }
+  } else {
+    console.log(`ℹ️ Nenhum arquivo para processar (downloadedFiles.length = 0)`);
   }
 
-  // Construir mensagem do usuário
+  // Construir mensagem do usuário com texto extraído dos arquivos
   let userMessageText = contextText;
   
+  // Adicionar textos extraídos dos arquivos
   if (extractedTexts.length > 0) {
+    console.log(`\n✅✅✅ INCLUINDO TEXTO EXTRAÍDO NA MENSAGEM AO GROK ✅✅✅`);
+    console.log(`   Total de textos extraídos: ${extractedTexts.length}`);
+    extractedTexts.forEach((extracted, index) => {
+      console.log(`   [${index + 1}] ${extracted.filename}: ${extracted.size} caracteres`);
+    });
+    
     userMessageText += `\n\n=== CONTEÚDO DOS ANEXOS ===\n\n`;
     
     extractedTexts.forEach((extracted, index) => {
@@ -114,14 +146,35 @@ de forma clara, objetiva e com foco prático para advogados.`;
     });
     
     userMessageText += `=== FIM DOS ANEXOS ===\n\n`;
+    
+    // Verificar se o texto foi realmente incluído
+    const totalExtractedChars = extractedTexts.reduce((sum, et) => sum + et.size, 0);
+    console.log(`   ✅ Total de caracteres de texto extraído incluído: ${totalExtractedChars}`);
+    console.log(`   ✅ Mensagem agora tem ${userMessageText.length} caracteres (antes: ${contextText.length})`);
+  } else if (downloadedFiles.length > 0) {
+    // Se arquivos foram enviados mas nenhum texto foi extraído, avisar
+    console.log(`\n⚠️⚠️⚠️ ATENÇÃO: NENHUM TEXTO FOI EXTRAÍDO DOS ARQUIVOS ⚠️⚠️⚠️`);
+    console.log(`   Arquivos recebidos: ${downloadedFiles.length}`);
+    console.log(`   Textos extraídos: ${extractedTexts.length}`);
+    
+    userMessageText += `\n\n⚠️ ATENÇÃO: ${downloadedFiles.length} arquivo(s) foram enviado(s), mas não foi possível extrair texto deles. `;
+    userMessageText += `Isso pode acontecer se os arquivos forem imagens escaneadas, formatos não suportados, ou arquivos corrompidos.\n\n`;
   }
   
   userMessageText += `Pergunta do usuário: ${question}`;
   
   messages.push({ role: 'user', content: userMessageText });
   
-  console.log(`📋 Mensagem final (${userMessageText.length} caracteres)`);
-  console.log(`📋 Total de arquivos processados: ${extractedTexts.length}`);
+  console.log(`\n📋 ========== MENSAGEM FINAL ENVIADA AO GROK ==========`);
+  console.log(`📋 Tamanho total: ${userMessageText.length} caracteres`);
+  console.log(`📋 Total de arquivos processados com texto: ${extractedTexts.length}`);
+  console.log(`📋 Primeiros 1000 caracteres:`);
+  console.log(userMessageText.substring(0, 1000));
+  console.log(`\n📋 Verificando se contém "=== CONTEÚDO DOS ANEXOS ===": ${userMessageText.includes('=== CONTEÚDO DOS ANEXOS ===') ? '✅ SIM' : '❌ NÃO'}`);
+  if (extractedTexts.length > 0) {
+    console.log(`📋 Verificando se contém texto do primeiro anexo (primeiros 50 chars): ${userMessageText.includes(extractedTexts[0].text.substring(0, 50)) ? '✅ SIM' : '❌ NÃO'}`);
+  }
+  console.log(`📋 ====================================================\n`);
 
   try {
     console.log(`💬 Enviando mensagem para o Grok com ${extractedTexts.length} arquivo(s) processado(s)`);
@@ -151,6 +204,15 @@ de forma clara, objetiva e com foco prático para advogados.`;
     const data = response.data;
     const answer = data?.choices?.[0]?.message?.content || '';
     
+    // Verificar se o texto foi incluído na mensagem
+    const hasExtractedText = extractedTexts.length > 0;
+    const messageContainsExtractedText = hasExtractedText && userMessageText.includes('=== CONTEÚDO DOS ANEXOS ===');
+    
+    console.log(`\n✅✅✅ RESPOSTA DO GROK RECEBIDA ✅✅✅`);
+    console.log(`   Texto extraído incluído na mensagem: ${messageContainsExtractedText ? '✅ SIM' : '❌ NÃO'}`);
+    console.log(`   Total de textos extraídos: ${extractedTexts.length}`);
+    console.log(`   Tamanho da mensagem enviada: ${userMessageText.length} caracteres`);
+    
     return res.json({ 
       answer: answer.trim(),
       payload: {
@@ -163,7 +225,22 @@ de forma clara, objetiva e com foco prático para advogados.`;
         messagesLength: messages.length,
         userMessageLength: userMessageText.length,
         extractedFilesCount: extractedTexts.length,
+        totalFilesReceived: downloadedFiles.length,
+        extractedTextsSummary: extractedTexts.map(et => ({
+          filename: et.filename,
+          size: et.size,
+          preview: et.text.substring(0, 200) + '...'
+        })),
+        // Informações de verificação
+        textExtractionStatus: {
+          filesReceived: downloadedFiles.length,
+          textsExtracted: extractedTexts.length,
+          textIncludedInMessage: messageContainsExtractedText,
+          totalExtractedChars: extractedTexts.reduce((sum, et) => sum + et.size, 0),
+          messageContainsMarker: userMessageText.includes('=== CONTEÚDO DOS ANEXOS ===')
+        }
       },
+      fullUserMessage: userMessageText // Mensagem completa para análise/debug
     });
   } catch (err) {
     console.error('❌ [server] Erro ao chamar Grok:');

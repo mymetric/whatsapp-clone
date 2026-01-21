@@ -519,3 +519,82 @@ export const firestoreRestUserService = {
   }
 };
 
+// Serviço para gerenciar estado de IA dos telefones (collection phones_answered_by_ai)
+export const firestoreRestPhoneAIService = {
+  // Normalizar número de telefone para usar como document ID
+  normalizePhoneNumber(phone: string): string {
+    // Remove o + e caracteres especiais, mantém apenas números
+    return phone.replace(/[^0-9]/g, '');
+  },
+
+  // Buscar estado de IA de um telefone
+  async getAIStatus(phone: string): Promise<boolean | null> {
+    try {
+      const phoneId = this.normalizePhoneNumber(phone);
+      const data = await firestoreRequest('GET', `phones_answered_by_ai/${phoneId}`);
+      
+      const fields = data.fields || {};
+      const aiActive = fields.ai_active?.booleanValue;
+      
+      return aiActive === true || aiActive === false ? aiActive : null;
+    } catch (error: any) {
+      // Se o documento não existir (404), retorna null
+      if (error.message?.includes('404') || error.message?.includes('NOT_FOUND')) {
+        return null;
+      }
+      console.error('❌ Erro ao buscar estado de IA do telefone:', error);
+      throw error;
+    }
+  },
+
+  // Salvar/atualizar estado de IA de um telefone
+  async setAIStatus(phone: string, aiActive: boolean): Promise<void> {
+    try {
+      const phoneId = this.normalizePhoneNumber(phone);
+      
+      const docData = {
+        fields: {
+          ai_active: { booleanValue: aiActive },
+          updatedAt: { stringValue: new Date().toISOString() }
+        }
+      };
+
+      // Tentar atualizar primeiro (PATCH)
+      try {
+        const serviceAccount = await loadFirebaseCredentials();
+        const projectId = serviceAccount.project_id;
+        const token = await getAccessToken(serviceAccount);
+        
+        const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/messages/documents/phones_answered_by_ai/${phoneId}?updateMask.fieldPaths=ai_active&updateMask.fieldPaths=updatedAt`;
+        
+        const response = await fetch(url, {
+          method: 'PATCH',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(docData)
+        });
+
+        if (response.ok) {
+          console.log(`✅ Estado de IA atualizado para telefone ${phoneId}: ${aiActive}`);
+          return;
+        }
+      } catch (updateError) {
+        // Se falhar, tentar criar (POST)
+        console.log(`⚠️ Tentando criar documento para telefone ${phoneId}`);
+      }
+
+      // Se não existir, criar novo documento (POST)
+      await firestoreRequest('POST', `phones_answered_by_ai`, {
+        documentId: phoneId,
+        ...docData
+      });
+      
+      console.log(`✅ Estado de IA criado para telefone ${phoneId}: ${aiActive}`);
+    } catch (error) {
+      console.error('❌ Erro ao salvar estado de IA do telefone:', error);
+      throw error;
+    }
+  }
+};

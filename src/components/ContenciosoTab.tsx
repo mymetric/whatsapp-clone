@@ -508,6 +508,33 @@ Use esse contexto para responder perguntas sobre o processo, andamentos e riscos
       const data = await response.json();
       const answer = data.answer || '';
 
+      // Log de verificação se o texto foi extraído e incluído
+      if (data.payloadSize?.textExtractionStatus) {
+        const status = data.payloadSize.textExtractionStatus;
+        console.log(`\n📊 ========== STATUS DA EXTRAÇÃO DE TEXTO ==========`);
+        console.log(`   Arquivos recebidos: ${status.filesReceived}`);
+        console.log(`   Textos extraídos: ${status.textsExtracted}`);
+        console.log(`   Texto incluído na mensagem: ${status.textIncludedInMessage ? '✅ SIM' : '❌ NÃO'}`);
+        console.log(`   Total de caracteres extraídos: ${status.totalExtractedChars}`);
+        console.log(`   Mensagem contém marcador "=== CONTEÚDO DOS ANEXOS ===": ${status.messageContainsMarker ? '✅ SIM' : '❌ NÃO'}`);
+        console.log(`   Tamanho da mensagem enviada: ${data.payloadSize.userMessageLength} caracteres`);
+        console.log(`================================================\n`);
+        
+        if (!status.textIncludedInMessage && status.filesReceived > 0) {
+          console.warn(`⚠️ ATENÇÃO: ${status.filesReceived} arquivo(s) foram enviado(s), mas o texto não foi incluído na mensagem ao Grok!`);
+        }
+      }
+
+      // Log do resumo dos textos extraídos
+      if (data.payloadSize?.extractedTextsSummary && data.payloadSize.extractedTextsSummary.length > 0) {
+        console.log(`\n📄 Textos extraídos dos anexos:`);
+        data.payloadSize.extractedTextsSummary.forEach((et: any, idx: number) => {
+          console.log(`   [${idx + 1}] ${et.filename}: ${et.size} caracteres`);
+          console.log(`       Preview: ${et.preview}`);
+        });
+        console.log(``);
+      }
+
       const assistantMsg = {
         role: 'assistant' as const,
         content: answer,

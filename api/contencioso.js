@@ -54,6 +54,12 @@ module.exports = async (req, res) => {
         boards (ids: $boardId) {
           id
           name
+          columns {
+            id
+            title
+            type
+            settings_str
+          }
           items_page (limit: $limit) {
             cursor
             items {
@@ -64,6 +70,11 @@ module.exports = async (req, res) => {
                 id
                 text
                 type
+                column {
+                  id
+                  title
+                  type
+                }
               }
             }
           }
@@ -76,6 +87,12 @@ module.exports = async (req, res) => {
         boards (ids: $boardId) {
           id
           name
+          columns {
+            id
+            title
+            type
+            settings_str
+          }
           items_page (limit: $limit, cursor: $cursor) {
             cursor
             items {
@@ -86,6 +103,11 @@ module.exports = async (req, res) => {
                 id
                 text
                 type
+                column {
+                  id
+                  title
+                  type
+                }
               }
             }
           }
@@ -102,6 +124,7 @@ module.exports = async (req, res) => {
     const MAX_PAGES = 10; // Reduzir para evitar timeout (10 páginas = 5000 itens máximo)
     const startTime = Date.now();
     const MAX_EXECUTION_TIME = 50000; // 50 segundos máximo de execução
+    let boardColumns = null;
 
     while (page < MAX_PAGES) {
       // Verificar se estamos perto do timeout
@@ -143,11 +166,17 @@ module.exports = async (req, res) => {
 
       const boards = data?.data?.boards;
       if (!Array.isArray(boards) || boards.length === 0) {
-        console.log('⚠️ Nenhum board encontrado, retornando array vazio');
-        return res.json([]);
+        console.log('⚠️ Nenhum board encontrado, retornando objeto vazio');
+        return res.json({ columns: [], items: [] });
       }
 
       const board = boards[0];
+      
+      // Salvar colunas apenas na primeira página
+      if (!boardColumns && board.columns && Array.isArray(board.columns)) {
+        boardColumns = board.columns;
+      }
+      
       const pageObj = board?.items_page;
       const items = Array.isArray(pageObj?.items) ? pageObj.items : [];
 
@@ -166,8 +195,10 @@ module.exports = async (req, res) => {
       }
     }
 
-    console.log(`✅ [server] Total de itens retornados: ${allItems.length}`);
-    return res.json(allItems);
+    return res.json({
+      columns: boardColumns || [],
+      items: allItems
+    });
   } catch (err) {
     console.error('❌ [server] Erro ao processar requisição:', err);
     console.error('❌ Erro name:', err.name);

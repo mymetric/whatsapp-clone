@@ -45,6 +45,7 @@ module.exports = async (req, res) => {
             id
             title
             type
+            settings_str
           }
         }
       }

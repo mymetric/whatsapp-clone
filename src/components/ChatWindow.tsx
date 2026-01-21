@@ -325,7 +325,7 @@ ${conversationHistory}`;
 
       try {
         console.log('📅 Carregando opções de status do board para telefone:', selectedPhone._id);
-        const { columns } = await mondayService.getBoardItemsWithColumns(ATENDIMENTO_BOARD_ID);
+        const columns = await mondayService.getBoardColumns(ATENDIMENTO_BOARD_ID);
 
         // Extrair opções de labels dos status da configuração da coluna (settings_str)
         const targetStatusIds = ['status', 'status_1', 'status_14', 'status_152'];

@@ -158,6 +158,37 @@ class MondayService {
   }
 
   /**
+   * Busca apenas as colunas de um board (sem itens) - mais rápido para carregar opções de status
+   */
+  async getBoardColumns(boardId: number | string): Promise<MondayColumn[]> {
+    const url = `/api/contencioso/columns?boardId=${boardId}`;
+
+    console.log('📄 Monday: Buscando apenas colunas do board via backend local', boardId, url);
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Erro desconhecido');
+      console.error('❌ Erro HTTP ao buscar colunas do Monday:', response.status, response.statusText, errorText);
+      throw new Error(`Erro HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+
+    if (Array.isArray(data)) {
+      return data as MondayColumn[];
+    }
+
+    console.warn('⚠️ Monday: Formato de resposta inesperado para colunas do board');
+    return [];
+  }
+
+  /**
    * Busca itens de um board específico do Monday (ex: board de contencioso)
    * via backend local (server/server.js), evitando CORS e exposição da API key.
    */

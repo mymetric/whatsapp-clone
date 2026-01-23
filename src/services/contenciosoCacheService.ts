@@ -21,6 +21,15 @@ interface CacheData {
   boardId: number;
 }
 
+interface AttachmentCountsCache {
+  counts: Record<string, number>;
+  timestamp: number;
+  boardId: number;
+}
+
+// TTL de 10 minutos para contagens de anexos
+const ATTACHMENT_COUNTS_TTL = 10 * 60 * 1000;
+
 const DB_NAME = 'contencioso_cache_db';
 const DB_VERSION = 1;
 const STORE_NAME = 'items';
@@ -257,6 +266,87 @@ class ContenciosoCacheService {
     } catch (error) {
       console.error('❌ Cache: Erro ao limpar todos os caches:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Salva contagens de anexos no cache
+   */
+  async saveAttachmentCounts(boardId: number, counts: Record<string, number>): Promise<void> {
+    try {
+      const db = await this.initDB();
+      const cacheData: AttachmentCountsCache = {
+        counts,
+        timestamp: Date.now(),
+        boardId,
+      };
+      const cacheKey = `attachment_counts_${boardId}`;
+
+      return new Promise((resolve, reject) => {
+        const transaction = db.transaction([STORE_NAME], 'readwrite');
+        const store = transaction.objectStore(STORE_NAME);
+        const request = store.put({ key: cacheKey, ...cacheData });
+
+        request.onsuccess = () => {
+          console.log(`💾 Cache: Contagens de anexos salvas (${Object.keys(counts).length} itens)`);
+          resolve();
+        };
+
+        request.onerror = () => {
+          console.error('❌ Cache: Erro ao salvar contagens de anexos:', request.error);
+          reject(request.error);
+        };
+      });
+    } catch (error) {
+      console.error('❌ Cache: Erro ao salvar contagens de anexos:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Carrega contagens de anexos do cache (com TTL de 10 minutos)
+   */
+  async loadAttachmentCounts(boardId: number): Promise<Record<string, number> | null> {
+    try {
+      const db = await this.initDB();
+      const cacheKey = `attachment_counts_${boardId}`;
+
+      return new Promise((resolve, reject) => {
+        const transaction = db.transaction([STORE_NAME], 'readonly');
+        const store = transaction.objectStore(STORE_NAME);
+        const request = store.get(cacheKey);
+
+        request.onsuccess = () => {
+          const result = request.result;
+
+          if (!result) {
+            console.log('📦 Cache: Nenhum cache de contagens encontrado');
+            resolve(null);
+            return;
+          }
+
+          const cacheData = result as AttachmentCountsCache;
+
+          // Verifica TTL - 10 minutos
+          const age = Date.now() - cacheData.timestamp;
+          if (age > ATTACHMENT_COUNTS_TTL) {
+            console.log(`📦 Cache: Contagens expiradas (${Math.round(age / 1000)}s > ${ATTACHMENT_COUNTS_TTL / 1000}s)`);
+            resolve(null);
+            return;
+          }
+
+          console.log(`📦 Cache: Contagens carregadas (${Object.keys(cacheData.counts).length} itens, ${Math.round(age / 1000)}s de idade)`);
+          resolve(cacheData.counts);
+        };
+
+        request.onerror = () => {
+          console.error('❌ Cache: Erro ao carregar contagens de anexos:', request.error);
+          reject(request.error);
+        };
+      });
+    } catch (error) {
+      console.error('❌ Cache: Erro ao carregar contagens de anexos:', error);
+      return null;
     }
   }
 }

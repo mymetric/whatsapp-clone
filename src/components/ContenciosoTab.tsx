@@ -53,6 +53,9 @@ const ContenciosoTab: React.FC = () => {
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [updateSuccess, setUpdateSuccess] = useState(false);
 
+  // Estado para arquivos locais (upload do usuário)
+  const [localFiles, setLocalFiles] = useState<{id: string; filename: string; mimeType: string; base64: string}[]>([]);
+
   /**
    * Carrega itens do cache IndexedDB (assíncrono)
    */
@@ -67,40 +70,67 @@ const ContenciosoTab: React.FC = () => {
   };
 
   /**
-   * Busca contagens de anexos para todos os itens
+   * Busca contagens de anexos para todos os itens (com cache)
    */
-  const loadAttachmentCounts = async (itemsToLoad: ContenciosoItem[]) => {
+  const loadAttachmentCounts = async (itemsToLoad: ContenciosoItem[], forceRefresh = false) => {
+    // Tenta carregar do cache primeiro (se não for refresh forçado)
+    if (!forceRefresh) {
+      const cachedCounts = await contenciosoCacheService.loadAttachmentCounts(CONTENCIOSO_BOARD_ID);
+      if (cachedCounts && Object.keys(cachedCounts).length > 0) {
+        console.log('📦 ContenciosoTab: Usando contagens de anexos do cache');
+        setAttachmentCounts(cachedCounts);
+        return;
+      }
+    }
+
     setLoadingAttachmentCounts(true);
     const counts: Record<string, number> = {};
 
     try {
+      console.log(`🔍 ContenciosoTab: Buscando contagens de anexos para ${itemsToLoad.length} itens...`);
+
       // Busca contagens em paralelo para todos os itens que têm numeroProcesso
-      const countPromises = itemsToLoad.map(async (item) => {
-        const numeroProcesso = item.column_values?.find(
-          (col) => col.id === 'numero_do_processo'
-        )?.text;
+      // Limita a 10 requisições paralelas para não sobrecarregar
+      const BATCH_SIZE = 10;
+      const itemsWithProcesso = itemsToLoad.filter(item =>
+        item.column_values?.find(col => col.id === 'numero_do_processo')?.text
+      );
 
-        if (!numeroProcesso) {
-          return { itemId: item.id, count: 0 };
-        }
+      for (let i = 0; i < itemsWithProcesso.length; i += BATCH_SIZE) {
+        const batch = itemsWithProcesso.slice(i, i + BATCH_SIZE);
 
-        try {
-          const attachments = await firestoreRestAttachmentService.getAttachmentsByLawsuitId(
-            numeroProcesso
-          );
-          return { itemId: item.id, count: attachments.length };
-        } catch (err) {
-          console.error(`Erro ao buscar contagem de anexos para item ${item.id}:`, err);
-          return { itemId: item.id, count: 0 };
-        }
-      });
+        const batchPromises = batch.map(async (item) => {
+          const numeroProcesso = item.column_values?.find(
+            (col) => col.id === 'numero_do_processo'
+          )?.text;
 
-      const results = await Promise.all(countPromises);
-      results.forEach(({ itemId, count }) => {
-        counts[itemId] = count;
-      });
+          if (!numeroProcesso) {
+            return { itemId: item.id, count: 0 };
+          }
 
-      setAttachmentCounts(counts);
+          try {
+            const attachments = await firestoreRestAttachmentService.getAttachmentsByLawsuitId(
+              numeroProcesso
+            );
+            return { itemId: item.id, count: attachments.length };
+          } catch (err) {
+            console.error(`Erro ao buscar contagem de anexos para item ${item.id}:`, err);
+            return { itemId: item.id, count: 0 };
+          }
+        });
+
+        const batchResults = await Promise.all(batchPromises);
+        batchResults.forEach(({ itemId, count }) => {
+          counts[itemId] = count;
+        });
+
+        // Atualiza o estado parcialmente para feedback visual
+        setAttachmentCounts(prev => ({ ...prev, ...counts }));
+      }
+
+      // Salva no cache
+      await contenciosoCacheService.saveAttachmentCounts(CONTENCIOSO_BOARD_ID, counts);
+      console.log('✅ ContenciosoTab: Contagens de anexos atualizadas e salvas no cache');
     } catch (err) {
       console.error('Erro ao carregar contagens de anexos:', err);
     } finally {
@@ -297,6 +327,7 @@ const ContenciosoTab: React.FC = () => {
     setSendingUpdate(false);
     setUpdateError(null);
     setUpdateSuccess(false);
+    setLocalFiles([]); // Limpar arquivos locais
   };
 
   const handleAttachmentDragStart = (attachment: Attachment, event: React.DragEvent<HTMLLIElement>) => {
@@ -340,6 +371,54 @@ const ContenciosoTab: React.FC = () => {
 
   const handleRemoveCopilotAttachment = (attachmentId: string) => {
     setCopilotAttachments((prev) => prev.filter((att) => att.id !== attachmentId));
+  };
+
+  // Função para converter arquivo para base64
+  const fileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => {
+        const result = reader.result as string;
+        // Remove o prefixo "data:...;base64," para obter apenas o base64
+        const base64 = result.split(',')[1];
+        resolve(base64);
+      };
+      reader.onerror = (error) => reject(error);
+    });
+  };
+
+  // Função para lidar com upload de arquivos locais
+  const handleLocalFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+
+    const newFiles: {id: string; filename: string; mimeType: string; base64: string}[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      try {
+        const base64 = await fileToBase64(file);
+        newFiles.push({
+          id: `local_${Date.now()}_${i}`,
+          filename: file.name,
+          mimeType: file.type || 'application/octet-stream',
+          base64: base64,
+        });
+        console.log(`📁 Arquivo local adicionado: ${file.name} (${file.type}, ${Math.round(file.size / 1024)}KB)`);
+      } catch (err) {
+        console.error(`Erro ao processar arquivo ${file.name}:`, err);
+      }
+    }
+
+    setLocalFiles((prev) => [...prev, ...newFiles]);
+    // Limpar o input para permitir selecionar o mesmo arquivo novamente
+    event.target.value = '';
+  };
+
+  // Função para remover arquivo local
+  const handleRemoveLocalFile = (fileId: string) => {
+    setLocalFiles((prev) => prev.filter((f) => f.id !== fileId));
   };
 
   const getFilteredAttachments = (): Attachment[] => {
@@ -444,22 +523,41 @@ Use esse contexto para responder perguntas sobre o processo, andamentos e riscos
     setCopilotLoading(true);
 
     try {
-      // Baixar anexos antes de enviar para o Grok
-      console.log(`📥 Baixando ${copilotAttachments.length} anexo(s)...`);
+      // Baixar anexos do Firestore antes de enviar para o Grok
+      console.log(`📥 Baixando ${copilotAttachments.length} anexo(s) do Firestore...`);
       const downloadedFiles = await Promise.all(
         copilotAttachments.map((att) => downloadAttachmentForGrok(att))
       );
 
-      console.log(`✅ ${downloadedFiles.length} arquivo(s) baixado(s):`);
+      console.log(`✅ ${downloadedFiles.length} arquivo(s) do Firestore baixado(s):`);
       downloadedFiles.forEach((file, idx) => {
         console.log(`  [${idx + 1}] ${file.filename}: ${file.mimeType}, base64 length: ${file.base64.length}`);
       });
 
-      const attachmentsPayload = copilotAttachments.map((att) => ({
-        attachment_name: att.attachment_name,
-        file_url: att.file_url,
-        id: att.id,
-      }));
+      // Combinar arquivos do Firestore com arquivos locais
+      const allFiles = [
+        ...downloadedFiles,
+        ...localFiles.map((f) => ({
+          filename: f.filename,
+          mimeType: f.mimeType,
+          base64: f.base64,
+        })),
+      ];
+
+      console.log(`📁 Total de arquivos para análise: ${allFiles.length} (${downloadedFiles.length} do Firestore + ${localFiles.length} locais)`);
+
+      const attachmentsPayload = [
+        ...copilotAttachments.map((att) => ({
+          attachment_name: att.attachment_name,
+          file_url: att.file_url,
+          id: att.id,
+        })),
+        ...localFiles.map((f) => ({
+          attachment_name: f.filename,
+          file_url: null,
+          id: f.id,
+        })),
+      ];
 
       // Incluir um resumo dos updates do Monday.com no contexto enviado ao Grok
       let questionWithMondayContext = question;
@@ -486,7 +584,7 @@ Use esse contexto para responder perguntas sobre o processo, andamentos e riscos
         itemName: selectedItem?.name,
         itemId: selectedItem?.id,
         attachments: attachmentsPayload,
-        files: downloadedFiles, // Enviar arquivos baixados em base64
+        files: allFiles, // Enviar todos os arquivos (Firestore + locais)
         promptId: selectedPrompt?.id || null,
       };
 
@@ -1118,13 +1216,15 @@ Use esse contexto para responder perguntas sobre o processo, andamentos e riscos
                       <li>“Existe algum risco processual relevante aqui?”</li>
                     </ul>
                   </div>
-                  {copilotAttachments.length > 0 && (
+                  {/* Arquivos selecionados (Firestore + locais) */}
+                  {(copilotAttachments.length > 0 || localFiles.length > 0) && (
                     <div className="contencioso-copilot-selected-list">
                       <div className="contencioso-copilot-selected-label">
-                        Anexos selecionados para o copiloto ({copilotAttachments.length}):
+                        Arquivos para análise ({copilotAttachments.length + localFiles.length}):
                       </div>
                       {copilotAttachments.map((att) => (
                         <div key={att.id} className="contencioso-copilot-selected-item">
+                          <span className="contencioso-copilot-file-icon">📎</span>
                           <div className="contencioso-copilot-selected-name">
                             {att.attachment_name || att.id}
                           </div>
@@ -1138,8 +1238,48 @@ Use esse contexto para responder perguntas sobre o processo, andamentos e riscos
                           </button>
                         </div>
                       ))}
+                      {localFiles.map((file) => (
+                        <div key={file.id} className="contencioso-copilot-selected-item contencioso-copilot-local-file">
+                          <span className="contencioso-copilot-file-icon">💻</span>
+                          <div className="contencioso-copilot-selected-name">
+                            {file.filename}
+                            <span className="contencioso-copilot-file-size">
+                              ({Math.round(file.base64.length * 0.75 / 1024)}KB)
+                            </span>
+                          </div>
+                          <button
+                            className="contencioso-copilot-remove-btn"
+                            onClick={() => handleRemoveLocalFile(file.id)}
+                            title="Remover arquivo"
+                            aria-label="Remover arquivo"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
                     </div>
                   )}
+
+                  {/* Botão de upload de arquivo local */}
+                  <div className="contencioso-copilot-upload-section">
+                    <input
+                      type="file"
+                      id="copilot-file-upload"
+                      multiple
+                      accept=".pdf,.txt,.doc,.docx,.json,.csv,.xml"
+                      onChange={handleLocalFileUpload}
+                      style={{ display: 'none' }}
+                    />
+                    <label
+                      htmlFor="copilot-file-upload"
+                      className="contencioso-copilot-upload-btn"
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/>
+                      </svg>
+                      Enviar arquivo do computador
+                    </label>
+                  </div>
                 </div>
 
                 <div className="contencioso-copilot-chat">

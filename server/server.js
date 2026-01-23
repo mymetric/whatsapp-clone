@@ -3,8 +3,58 @@ const fs = require('fs');
 const express = require('express');
 const axios = require('axios');
 const FormData = require('form-data');
-const pdf = require('pdf-parse');
+const { PDFParse } = require('pdf-parse');
+const admin = require('firebase-admin');
 require('dotenv').config();
+
+// Inicializar Firebase Admin SDK
+let firestoreDb = null;
+const initFirebase = () => {
+  try {
+    if (admin.apps.length === 0) {
+      const projectId = process.env.FIREBASE_PROJECT_ID || process.env.REACT_APP_FIREBASE_PROJECT_ID;
+      const privateKeyId = process.env.FIREBASE_PRIVATE_KEY_ID || process.env.REACT_APP_FIREBASE_PRIVATE_KEY_ID;
+      let privateKey = process.env.FIREBASE_PRIVATE_KEY || process.env.REACT_APP_FIREBASE_PRIVATE_KEY || '';
+      const clientEmail = process.env.FIREBASE_CLIENT_EMAIL || process.env.REACT_APP_FIREBASE_CLIENT_EMAIL;
+
+      if (!projectId || !privateKey || !clientEmail) {
+        console.warn('⚠️ Firebase não configurado. Configure FIREBASE_PROJECT_ID, FIREBASE_PRIVATE_KEY e FIREBASE_CLIENT_EMAIL no .env');
+        return null;
+      }
+
+      // Processar a private key: remover aspas e converter \\n para quebras de linha reais
+      privateKey = privateKey
+        .replace(/^["']|["']$/g, '') // Remove aspas no início e fim
+        .replace(/\\n/g, '\n'); // Converte \n literais para quebras de linha
+
+      // Verificar se a chave parece válida
+      if (!privateKey.includes('-----BEGIN PRIVATE KEY-----')) {
+        console.warn('⚠️ FIREBASE_PRIVATE_KEY não parece estar no formato PEM correto');
+        return null;
+      }
+
+      admin.initializeApp({
+        credential: admin.credential.cert({
+          projectId,
+          privateKeyId,
+          privateKey,
+          clientEmail,
+        }),
+      });
+      console.log('✅ Firebase Admin SDK inicializado');
+    }
+    // Conectar ao database "messages"
+    firestoreDb = admin.firestore();
+    firestoreDb.settings({ databaseId: 'messages' });
+    return firestoreDb;
+  } catch (err) {
+    console.error('❌ Erro ao inicializar Firebase:', err.message);
+    return null;
+  }
+};
+
+// Inicializar Firebase ao carregar o servidor
+initFirebase();
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -66,6 +116,90 @@ app.get('/api/proxy-file', async (req, res) => {
 // Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', service: 'backend', timestamp: new Date().toISOString() });
+});
+
+/**
+ * Busca mensagens do Firestore (database "messages")
+ * Query params:
+ *   - phone: telefone do chat (obrigatório)
+ *   - limit: número máximo de mensagens (opcional, default 50)
+ */
+app.get('/api/firestore/messages', async (req, res) => {
+  try {
+    if (!firestoreDb) {
+      return res.status(500).json({ error: 'Firebase não configurado no servidor' });
+    }
+
+    const phone = req.query.phone;
+    const limitParam = parseInt(req.query.limit) || 50;
+
+    if (!phone) {
+      return res.status(400).json({ error: 'Parâmetro phone é obrigatório' });
+    }
+
+    // Normalizar telefone (remover caracteres não numéricos)
+    const normalizedPhone = String(phone).replace(/\D/g, '');
+
+    console.log(`📱 [server] Buscando mensagens para telefone: ${normalizedPhone}`);
+
+    // Buscar mensagens onde chat_phone corresponde ao telefone
+    // O chat_phone pode ser int64 ou string dependendo do registro
+    const messagesRef = firestoreDb.collection('messages');
+
+    // Tentar buscar como número e como string
+    const queryNumeric = messagesRef
+      .where('chat_phone', '==', parseInt(normalizedPhone))
+      .orderBy('timestamp', 'desc')
+      .limit(limitParam);
+
+    const queryString = messagesRef
+      .where('chat_phone', '==', normalizedPhone)
+      .orderBy('timestamp', 'desc')
+      .limit(limitParam);
+
+    const [snapshotNumeric, snapshotString] = await Promise.all([
+      queryNumeric.get().catch(() => ({ docs: [] })),
+      queryString.get().catch(() => ({ docs: [] })),
+    ]);
+
+    // Combinar resultados e remover duplicatas
+    const messagesMap = new Map();
+
+    const processDoc = (doc) => {
+      const data = doc.data();
+      messagesMap.set(doc.id, {
+        id: doc.id,
+        audio: data.audio || false,
+        chat_phone: String(data.chat_phone),
+        content: data.content || '',
+        image: data.image || '',
+        name: data.name || '',
+        source: data.source || '',
+        timestamp: data.timestamp?.toDate?.() || data.timestamp || null,
+      });
+    };
+
+    snapshotNumeric.docs?.forEach(processDoc);
+    snapshotString.docs?.forEach(processDoc);
+
+    const messages = Array.from(messagesMap.values())
+      .sort((a, b) => {
+        const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+        const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+        return timeB - timeA; // Mais recentes primeiro
+      })
+      .slice(0, limitParam);
+
+    console.log(`✅ [server] Encontradas ${messages.length} mensagens para ${normalizedPhone}`);
+
+    return res.json({ messages, count: messages.length });
+  } catch (err) {
+    console.error('❌ [server] Erro ao buscar mensagens do Firestore:', err);
+    return res.status(500).json({
+      error: 'Erro ao buscar mensagens',
+      details: err.message,
+    });
+  }
 });
 
 /**
@@ -710,8 +844,10 @@ async function extractTextFromFile(file) {
     if (mimeType === 'application/pdf' || filename.endsWith('.pdf')) {
       console.log(`📄 Detectado como PDF: ${file.filename}`);
       try {
-        // pdf-parse é uma função que recebe um buffer
-        const result = await pdf(fileBuffer);
+        // pdf-parse v2.x: new PDFParse({ data: buffer }).getText()
+        const parser = new PDFParse({ data: fileBuffer });
+        const result = await parser.getText();
+        await parser.destroy();
         const extractedText = result.text || '';
         console.log(`✅ PDF processado: ${extractedText.length} caracteres extraídos`);
         if (extractedText.length === 0) {

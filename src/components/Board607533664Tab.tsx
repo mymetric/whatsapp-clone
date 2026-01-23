@@ -15,6 +15,7 @@ interface SortConfig {
 }
 
 const Board607533664Tab: React.FC = () => {
+  // Estados do Board
   const [items, setItems] = useState<MondayBoardItem[]>([]);
   const [columns, setColumns] = useState<MondayColumn[]>([]);
   const [loading, setLoading] = useState(false);
@@ -344,79 +345,79 @@ const Board607533664Tab: React.FC = () => {
 
   return (
     <div className="board-tab">
-      <div className="board-header">
-        <div className="board-title">
-          <span className="board-icon">📊</span>
-          <h2>Atendimento</h2>
-          <span className="board-count" title="Total de itens">
-            {items.length} item(s)
-          </span>
-          {lastUpdate && (
-            <span className="board-last-update" title="Última atualização">
-              {new Date(lastUpdate).toLocaleString('pt-BR', {
-                day: '2-digit',
-                month: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit'
-              })}
-            </span>
-          )}
-          {updating && (
-            <span className="board-updating">
-              <div className="updating-spinner"></div>
-              Atualizando...
-            </span>
-          )}
-        </div>
-        <div className="board-search">
-          <input
-            type="text"
-            placeholder="Buscar itens..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
-        </div>
-        <button 
-          onClick={() => setShowFilters(!showFilters)} 
-          className={`filter-button ${showFilters ? 'active' : ''}`}
-          title="Filtros por coluna"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z"/>
-          </svg>
-          {hasActiveFilters && <span className="filter-badge"></span>}
-        </button>
-        {hasActiveFilters && (
-          <button 
-            onClick={clearAllFilters} 
-            className="clear-filters-button" 
-            title="Limpar filtros"
-          >
-            ✕ Limpar
-          </button>
-        )}
-        <button 
-          onClick={() => setShowColumnSelector(true)} 
-          className="columns-button" 
-          title="Selecionar colunas"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M3 5h18v2H3zm0 6h18v2H3zm0 6h18v2H3z"/>
-          </svg>
-        </button>
-        <button 
-          onClick={() => loadItems(true)} 
-          className="refresh-button" 
-          title="Atualizar dados"
-          disabled={updating}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" className={updating ? 'spinning' : ''}>
-            <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
-          </svg>
-        </button>
-      </div>
+          <div className="board-header">
+            <div className="board-title">
+              <span className="board-icon">📊</span>
+              <h2>Atendimento</h2>
+              <span className="board-count" title="Total de itens">
+                {items.length} item(s)
+              </span>
+              {lastUpdate && (
+                <span className="board-last-update" title="Última atualização">
+                  {new Date(lastUpdate).toLocaleString('pt-BR', {
+                    day: '2-digit',
+                    month: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                  })}
+                </span>
+              )}
+              {updating && (
+                <span className="board-updating">
+                  <div className="updating-spinner"></div>
+                  Atualizando...
+                </span>
+              )}
+            </div>
+            <div className="board-search">
+              <input
+                type="text"
+                placeholder="Buscar itens..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
+            </div>
+            <button
+              onClick={() => setShowFilters(!showFilters)}
+              className={`filter-button ${showFilters ? 'active' : ''}`}
+              title="Filtros por coluna"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z"/>
+              </svg>
+              {hasActiveFilters && <span className="filter-badge"></span>}
+            </button>
+            {hasActiveFilters && (
+              <button
+                onClick={clearAllFilters}
+                className="clear-filters-button"
+                title="Limpar filtros"
+              >
+                ✕ Limpar
+              </button>
+            )}
+            <button
+              onClick={() => setShowColumnSelector(true)}
+              className="columns-button"
+              title="Selecionar colunas"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M3 5h18v2H3zm0 6h18v2H3zm0 6h18v2H3z"/>
+              </svg>
+            </button>
+            <button
+              onClick={() => loadItems(true)}
+              className="refresh-button"
+              title="Atualizar dados"
+              disabled={updating}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" className={updating ? 'spinning' : ''}>
+                <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+              </svg>
+            </button>
+          </div>
 
-      <div className="board-content">
+          <div className="board-content">
         <div className="board-table-container">
           <table className="board-table">
             <thead>

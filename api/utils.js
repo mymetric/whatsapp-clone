@@ -1,5 +1,4 @@
 let axios;
-let pdf = null;
 
 try {
   axios = require('axios');
@@ -7,10 +6,34 @@ try {
   console.error('❌ Erro ao carregar axios:', error);
 }
 
-try {
-  pdf = require('pdf-parse');
-} catch (error) {
-  console.warn('⚠️ pdf-parse não pôde ser carregado (funcionalidade de PDF limitada):', error.message);
+// Função auxiliar para extrair texto de PDF usando unpdf (funciona em serverless)
+async function extractTextFromPDF(buffer) {
+  try {
+    // Importar unpdf dinamicamente (ES module)
+    const { extractText } = await import('unpdf');
+
+    // Converter Buffer para Uint8Array corretamente
+    // Buffer.from().buffer não funciona diretamente, precisa usar slice
+    let data;
+    if (buffer instanceof Uint8Array && !(buffer instanceof Buffer)) {
+      data = buffer;
+    } else {
+      // Para Node.js Buffer, usar Uint8Array.from() ou criar novo array
+      data = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    }
+
+    console.log(`🔧 [extractTextFromPDF] Extraindo texto com unpdf, data size: ${data.length}, isUint8Array: ${data instanceof Uint8Array}, isBuffer: ${Buffer.isBuffer(data)}`);
+
+    const result = await extractText(data, { mergePages: true });
+
+    console.log(`✅ [extractTextFromPDF] Texto extraído: ${result.text?.length || 0} caracteres`);
+
+    return result.text || '';
+  } catch (error) {
+    console.error('❌ [extractTextFromPDF] Erro ao extrair texto:', error.message);
+    console.error('❌ [extractTextFromPDF] Stack:', error.stack);
+    return null;
+  }
 }
 
 function loadMondayApiKey() {
@@ -66,20 +89,17 @@ async function extractTextFromFile(file) {
     if (mimeType === 'application/pdf' || filename.endsWith('.pdf')) {
       console.log(`📄 Detectado como PDF: ${file.filename}`);
 
-      if (!pdf) {
-        console.warn('⚠️ pdf-parse não está disponível. Pulando extração de PDF.');
-        return null;
-      }
-
       try {
-        const result = await pdf(fileBuffer);
-        const extractedText = result.text || '';
-        console.log(`✅ [extractTextFromFile] PDF processado: ${extractedText.length} caracteres extraídos`);
-        if (extractedText.length === 0) {
-          console.warn(`⚠️ [extractTextFromFile] PDF ${file.filename} não contém texto extraível (pode ser imagem escaneada)`);
-        } else {
-          console.log(`📝 [extractTextFromFile] Primeiros 200 caracteres: ${extractedText.substring(0, 200)}...`);
+        console.log(`🔧 [extractTextFromFile] Extraindo texto do PDF com pdfjs-dist...`);
+        const extractedText = await extractTextFromPDF(fileBuffer);
+
+        if (!extractedText) {
+          console.warn(`⚠️ [extractTextFromFile] PDF ${file.filename} não contém texto extraível`);
+          return null;
         }
+
+        console.log(`✅ [extractTextFromFile] PDF processado: ${extractedText.length} caracteres extraídos`);
+        console.log(`📝 [extractTextFromFile] Primeiros 200 caracteres: ${extractedText.substring(0, 200)}...`);
         return extractedText;
       } catch (pdfError) {
         console.error(`❌ [extractTextFromFile] Erro ao processar PDF ${file.filename}:`, pdfError.message);

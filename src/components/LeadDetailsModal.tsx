@@ -1,5 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { MondayBoardItem, mondayService, MondayUpdate } from '../services/mondayService';
+import { firestoreMessagesService, FirestoreMessage } from '../services/firestoreMessagesService';
+import { messageService } from '../services/messageService';
 import './LeadDetailsModal.css';
 
 interface LeadDetailsModalProps {
@@ -16,6 +18,19 @@ const LeadDetailsModal: React.FC<LeadDetailsModalProps> = ({ item, columns, boar
   const [updates, setUpdates] = useState<MondayUpdate[]>([]);
   const [loadingUpdates, setLoadingUpdates] = useState(false);
   const [updatesError, setUpdatesError] = useState<string | null>(null);
+
+  // Estados do WhatsApp
+  const [whatsappMessages, setWhatsappMessages] = useState<FirestoreMessage[]>([]);
+  const [whatsappLoading, setWhatsappLoading] = useState(false);
+  const [whatsappError, setWhatsappError] = useState<string | null>(null);
+  const [whatsappLoaded, setWhatsappLoaded] = useState(false);
+
+  // Estados para envio de mensagem
+  const [newMessage, setNewMessage] = useState('');
+  const [showMessageInput, setShowMessageInput] = useState(false);
+  const [sendingMessage, setSendingMessage] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const loadUpdates = useCallback(async () => {
     setLoadingUpdates(true);
@@ -42,6 +57,154 @@ const LeadDetailsModal: React.FC<LeadDetailsModalProps> = ({ item, columns, boar
       loadUpdates();
     }
   }, [activeTab, updates.length, loadUpdates]);
+
+  // Encontra o telefone do lead nas colunas
+  const getLeadPhone = useCallback((): string | null => {
+    if (!item.column_values) return null;
+
+    // Procurar coluna de telefone por ID ou título
+    const phoneKeywords = ['telefone', 'phone', 'celular', 'whatsapp', 'fone', 'tel'];
+
+    for (const col of item.column_values) {
+      const colId = col.id?.toLowerCase() || '';
+      const colTitle = columns.find(c => c.id === col.id)?.title?.toLowerCase() || '';
+
+      if (phoneKeywords.some(kw => colId.includes(kw) || colTitle.includes(kw))) {
+        if (col.text && col.text.trim()) {
+          // Normalizar: remover caracteres não numéricos
+          const phone = col.text.replace(/\D/g, '');
+          if (phone.length >= 10) {
+            return phone;
+          }
+        }
+      }
+    }
+    return null;
+  }, [item.column_values, columns]);
+
+  // Carrega mensagens do WhatsApp
+  const loadWhatsappMessages = useCallback(async () => {
+    const phone = getLeadPhone();
+    if (!phone) {
+      setWhatsappError('Telefone não encontrado nos dados do lead');
+      return;
+    }
+
+    setWhatsappLoading(true);
+    setWhatsappError(null);
+
+    try {
+      const result = await firestoreMessagesService.getMessages(phone, 100);
+      setWhatsappMessages(result.messages);
+      setWhatsappLoaded(true);
+      if (result.messages.length === 0) {
+        setWhatsappError('Nenhuma mensagem encontrada para este telefone');
+      }
+    } catch (err: any) {
+      console.error('Erro ao buscar mensagens:', err);
+      setWhatsappError(err.message || 'Erro ao buscar mensagens');
+    } finally {
+      setWhatsappLoading(false);
+    }
+  }, [getLeadPhone]);
+
+  // Carrega mensagens do WhatsApp quando a aba for selecionada
+  useEffect(() => {
+    if (activeTab === 'whatsapp' && !whatsappLoaded) {
+      loadWhatsappMessages();
+    }
+  }, [activeTab, whatsappLoaded, loadWhatsappMessages]);
+
+  // Scroll para o final das mensagens
+  const scrollToBottom = useCallback(() => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, []);
+
+  // Scroll automático quando novas mensagens chegarem
+  useEffect(() => {
+    if (whatsappMessages.length > 0) {
+      scrollToBottom();
+    }
+  }, [whatsappMessages, scrollToBottom]);
+
+  // Ajustar altura do textarea
+  const adjustTextareaHeight = useCallback(() => {
+    if (textareaRef.current) {
+      const textarea = textareaRef.current;
+      textarea.style.height = 'auto';
+      textarea.style.height = Math.min(textarea.scrollHeight, 100) + 'px';
+    }
+  }, []);
+
+  // Enviar mensagem
+  const handleSendMessage = async () => {
+    const phone = getLeadPhone();
+    if (!newMessage.trim() || !phone) return;
+
+    const messageText = newMessage.trim();
+    setNewMessage('');
+    setSendingMessage(true);
+
+    // Criar mensagem otimista (aparece imediatamente)
+    const optimisticMessage: FirestoreMessage = {
+      id: `temp_${Date.now()}`,
+      content: messageText,
+      source: 'Bot', // Mensagens enviadas pelo sistema aparecem como Bot
+      timestamp: new Date().toISOString(),
+      name: 'Você',
+      chat_phone: phone,
+      audio: false,
+      image: '',
+    };
+
+    setWhatsappMessages(prev => [...prev, optimisticMessage]);
+
+    try {
+      // Enviar mensagem via API - adicionar código do país se não tiver
+      const phoneToSend = phone.startsWith('+') ? phone : `+${phone}`;
+      const result = await messageService.sendMessage(phoneToSend, messageText);
+
+      if (result.success) {
+        console.log('✅ Mensagem enviada com sucesso');
+        setShowMessageInput(false);
+
+        // Atualizar lista de mensagens após envio bem-sucedido
+        setTimeout(() => {
+          loadWhatsappMessages();
+        }, 1000);
+      } else {
+        throw new Error(result.error || 'Erro ao enviar mensagem');
+      }
+    } catch (error) {
+      console.error('❌ Erro ao enviar mensagem:', error);
+      // Remover mensagem otimista em caso de erro
+      setWhatsappMessages(prev => prev.filter(msg => msg.id !== optimisticMessage.id));
+      setNewMessage(messageText); // Restaurar texto
+      alert(`Erro ao enviar mensagem: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
+    } finally {
+      setSendingMessage(false);
+    }
+  };
+
+  // Tecla Enter para enviar
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSendMessage();
+    }
+  };
+
+  // Mostrar input de mensagem
+  const handleShowInput = () => {
+    setShowMessageInput(true);
+    setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+      }
+    }, 100);
+  };
 
   // Gera a URL do Monday.com para o item
   const getMondayUrl = () => {
@@ -204,13 +367,146 @@ const LeadDetailsModal: React.FC<LeadDetailsModalProps> = ({ item, columns, boar
     );
   };
 
+  // Formatar timestamp
+  const formatTimestamp = (timestamp: string | null) => {
+    if (!timestamp) return '-';
+    const date = new Date(timestamp);
+    return date.toLocaleString('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
   const renderWhatsAppTab = () => {
+    const phone = getLeadPhone();
+
+    if (whatsappLoading) {
+      return (
+        <div className="tab-content whatsapp-tab">
+          <div className="whatsapp-loading">
+            <div className="loading-spinner-small"></div>
+            <p>Carregando mensagens...</p>
+          </div>
+        </div>
+      );
+    }
+
+    if (!phone) {
+      return (
+        <div className="tab-content whatsapp-tab">
+          <div className="whatsapp-placeholder">
+            <div className="whatsapp-icon">📱</div>
+            <p>Telefone não encontrado nos dados do lead</p>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="tab-content whatsapp-tab">
-        <div className="whatsapp-placeholder">
-          <div className="whatsapp-icon">💬</div>
-          <p>Conversa com o lead será exibida aqui</p>
+        <div className="whatsapp-header-info">
+          <span className="whatsapp-phone-label">📱 {phone}</span>
+          {whatsappMessages.length > 0 && (
+            <span className="whatsapp-count">{whatsappMessages.length} mensagem(s)</span>
+          )}
+          <button onClick={loadWhatsappMessages} className="whatsapp-refresh-btn" title="Atualizar mensagens">
+            🔄
+          </button>
         </div>
+
+        {whatsappMessages.length > 0 ? (
+          <div className="whatsapp-messages-list">
+            {whatsappMessages.map((msg) => (
+              <div
+                key={msg.id}
+                className={`whatsapp-message ${msg.source === 'Contact' ? 'contact' : 'bot'} ${msg.id.startsWith('temp_') ? 'sending' : ''}`}
+              >
+                <div className="whatsapp-message-header">
+                  <span className="whatsapp-message-name">{msg.name || 'Desconhecido'}</span>
+                  <span className="whatsapp-message-source">
+                    {msg.source === 'Contact' ? 'Cliente' : 'Bot'}
+                  </span>
+                  <span className="whatsapp-message-time">
+                    {msg.id.startsWith('temp_') ? 'Enviando...' : formatTimestamp(msg.timestamp)}
+                  </span>
+                </div>
+                <div className="whatsapp-message-content">
+                  {msg.audio && <span className="whatsapp-audio-badge">Audio</span>}
+                  {msg.image && (
+                    <img src={msg.image} alt="Imagem" className="whatsapp-message-image" />
+                  )}
+                  {msg.content}
+                </div>
+              </div>
+            ))}
+            <div ref={messagesEndRef} />
+          </div>
+        ) : (
+          <div className="whatsapp-empty">
+            <div className="whatsapp-icon">💬</div>
+            <p>{whatsappError || 'Nenhuma mensagem encontrada'}</p>
+            {whatsappError && (
+              <button onClick={loadWhatsappMessages} className="retry-btn-small" style={{ marginTop: '12px' }}>
+                Tentar novamente
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Input de envio de mensagem */}
+        {showMessageInput ? (
+          <div className="whatsapp-input-container">
+            <textarea
+              ref={textareaRef}
+              value={newMessage}
+              onChange={(e) => {
+                setNewMessage(e.target.value);
+                adjustTextareaHeight();
+              }}
+              onKeyPress={handleKeyPress}
+              placeholder="Digite uma mensagem..."
+              rows={1}
+              className="whatsapp-input"
+              disabled={sendingMessage}
+            />
+            <button
+              onClick={handleSendMessage}
+              disabled={!newMessage.trim() || sendingMessage}
+              className="whatsapp-send-btn"
+              title="Enviar mensagem"
+            >
+              {sendingMessage ? (
+                <div className="loading-spinner-tiny"></div>
+              ) : (
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                </svg>
+              )}
+            </button>
+            <button
+              onClick={() => {
+                setShowMessageInput(false);
+                setNewMessage('');
+              }}
+              className="whatsapp-cancel-btn"
+              title="Cancelar"
+            >
+              ✕
+            </button>
+          </div>
+        ) : (
+          <div className="whatsapp-input-placeholder">
+            <button onClick={handleShowInput} className="whatsapp-write-btn">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
+              </svg>
+              <span>Escrever mensagem</span>
+            </button>
+          </div>
+        )}
       </div>
     );
   };

@@ -1,4 +1,4 @@
-const { axios } = require('./utils');
+const { axios } = require('../lib/utils');
 
 module.exports = async (req, res) => {
   // CORS headers (seguro para consumo via browser; same-origin no Vercel)

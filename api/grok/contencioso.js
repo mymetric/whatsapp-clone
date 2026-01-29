@@ -1,4 +1,4 @@
-const { loadGrokApiKey, extractTextFromFile, getPdfParseStatus, axios } = require('../utils');
+const { loadGrokApiKey, extractTextFromFile, getPdfParseStatus, axios } = require('../../lib/utils');
 
 module.exports = async (req, res) => {
   // CORS headers

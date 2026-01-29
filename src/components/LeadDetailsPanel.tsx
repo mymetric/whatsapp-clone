@@ -6,27 +6,35 @@ import { firestoreMessagesService, FirestoreMessage } from '../services/firestor
 import { messageService } from '../services/messageService';
 import { promptService, Prompt } from '../services/api';
 import { grokService } from '../services/grokService';
-import './LeadDetailsModal.css';
+import './LeadDetailsPanel.css';
 
 const ATENDIMENTO_BOARD_ID = 607533664;
 
-interface LeadDetailsModalProps {
+interface LeadDetailsPanelProps {
   item: MondayBoardItem;
   columns: any[];
   boardId?: string | number;
   onClose: () => void;
   onLeadCreated?: () => void;
-  defaultTab?: 'details' | 'updates' | 'whatsapp';
+  defaultTab?: 'details' | 'updates' | 'whatsapp' | 'copilot';
 }
 
-type TabType = 'details' | 'updates' | 'whatsapp';
+type TabType = 'details' | 'updates' | 'whatsapp' | 'copilot';
 
-const LeadDetailsModal: React.FC<LeadDetailsModalProps> = ({ item, columns, boardId, onClose, onLeadCreated, defaultTab = 'details' }) => {
+interface CopilotMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: Date;
+}
+
+const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boardId, onClose, onLeadCreated, defaultTab = 'whatsapp' }) => {
   const [activeTab, setActiveTab] = useState<TabType>(defaultTab);
   const [updates, setUpdates] = useState<MondayUpdate[]>([]);
   const [loadingUpdates, setLoadingUpdates] = useState(false);
   const [updatesError, setUpdatesError] = useState<string | null>(null);
-  const [isClosing, setIsClosing] = useState(false);
+  const [newUpdateText, setNewUpdateText] = useState('');
+  const [sendingUpdate, setSendingUpdate] = useState(false);
 
   // Estados do WhatsApp
   const [whatsappMessages, setWhatsappMessages] = useState<FirestoreMessage[]>([]);
@@ -47,6 +55,11 @@ const LeadDetailsModal: React.FC<LeadDetailsModalProps> = ({ item, columns, boar
   const [leadNameInput, setLeadNameInput] = useState('');
   const [leadEmailInput, setLeadEmailInput] = useState('');
   const [createLeadError, setCreateLeadError] = useState<string | null>(null);
+  const [statusOptions, setStatusOptions] = useState<Record<string, string[]>>({});
+  const [statusValue, setStatusValue] = useState('');
+  const [status1Value, setStatus1Value] = useState('');
+  const [status14Value, setStatus14Value] = useState('');
+  const [status152Value, setStatus152Value] = useState('');
 
   // Estados para prompts
   const [prompts, setPrompts] = useState<Prompt[]>([]);
@@ -58,14 +71,27 @@ const LeadDetailsModal: React.FC<LeadDetailsModalProps> = ({ item, columns, boar
   const [promptDescriptionInput, setPromptDescriptionInput] = useState('');
   const [savingPrompt, setSavingPrompt] = useState(false);
 
+  // Estados para Copiloto
+  const [copilotMessages, setCopilotMessages] = useState<CopilotMessage[]>([]);
+  const [copilotInput, setCopilotInput] = useState('');
+  const [copilotLoading, setCopilotLoading] = useState(false);
+  const copilotEndRef = useRef<HTMLDivElement>(null);
+
   // Verificar se é um item órfão (sem lead no Monday)
   const isOrphan = item.id.startsWith('whatsapp_');
 
+  // Resetar estados quando o item mudar
+  useEffect(() => {
+    setWhatsappMessages([]);
+    setWhatsappLoaded(false);
+    setWhatsappError(null);
+    setUpdates([]);
+    setCopilotMessages([]);
+    setActiveTab('whatsapp');
+  }, [item.id]);
+
   const handleClose = useCallback(() => {
-    setIsClosing(true);
-    setTimeout(() => {
-      onClose();
-    }, 200);
+    onClose();
   }, [onClose]);
 
   const loadUpdates = useCallback(async () => {
@@ -89,12 +115,66 @@ const LeadDetailsModal: React.FC<LeadDetailsModalProps> = ({ item, columns, boar
     }
   }, [item.id, isOrphan]);
 
+  // Função para enviar update para o Monday
+  const handleSendUpdate = async () => {
+    if (!newUpdateText.trim() || sendingUpdate || isOrphan) return;
+    setSendingUpdate(true);
+    try {
+      await mondayService.createUpdate(item.id, newUpdateText.trim());
+      setNewUpdateText('');
+      // Recarregar updates para mostrar o novo
+      await loadUpdates();
+    } catch (error) {
+      console.error('Erro ao enviar update:', error);
+      alert('Erro ao enviar update. Tente novamente.');
+    } finally {
+      setSendingUpdate(false);
+    }
+  };
+
   // Carrega os updates quando a aba for selecionada
   useEffect(() => {
     if (activeTab === 'updates' && updates.length === 0 && !isOrphan) {
       loadUpdates();
     }
   }, [activeTab, updates.length, loadUpdates, isOrphan]);
+
+  // Carrega opções de status do Monday quando o modal de criar lead é aberto
+  useEffect(() => {
+    if (!showCreateLeadModal) return;
+
+    const loadStatusOptions = async () => {
+      try {
+        console.log('📅 Carregando opções de status do board para cadastro de lead');
+        const boardColumns = await mondayService.getBoardColumns(ATENDIMENTO_BOARD_ID);
+
+        const targetStatusIds = ['status', 'status_1', 'status_14', 'status_152'];
+        const newStatusOptions: Record<string, string[]> = {};
+
+        if (Array.isArray(boardColumns)) {
+          boardColumns.forEach((col: any) => {
+            if (!col || !targetStatusIds.includes(col.id) || col.type !== 'status') return;
+            if (!col.settings_str) return;
+            try {
+              const settings = JSON.parse(col.settings_str);
+              const labelsObj = settings?.labels || {};
+              const labels = Object.values(labelsObj).filter((v: any) => typeof v === 'string' && v.trim().length > 0) as string[];
+              newStatusOptions[col.id] = labels;
+            } catch (e) {
+              console.error('❌ Erro ao parsear settings_str da coluna do Monday:', col.id, e);
+            }
+          });
+        }
+
+        console.log('✅ Opções de status carregadas:', Object.keys(newStatusOptions).length, 'colunas');
+        setStatusOptions(newStatusOptions);
+      } catch (error) {
+        console.error('❌ Erro ao carregar opções de status do Monday:', error);
+      }
+    };
+
+    loadStatusOptions();
+  }, [showCreateLeadModal]);
 
   // Encontra o telefone do lead nas colunas
   const getLeadPhone = useCallback((): string | null => {
@@ -264,12 +344,21 @@ Instruções:
       setNewMessage(response);
       setShowMessageInput(true);
 
+      // Múltiplos ajustes para garantir que o textarea expanda
       setTimeout(() => {
-        adjustTextareaHeight();
         if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto';
+          textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px';
           textareaRef.current.focus();
         }
-      }, 0);
+      }, 100);
+
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto';
+          textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px';
+        }
+      }, 300);
 
     } catch (error) {
       console.error('Erro ao usar prompt:', error);
@@ -277,15 +366,6 @@ Instruções:
     } finally {
       setUsingPrompt(null);
     }
-  };
-
-  // Abrir modal de edição de prompt
-  const handleEditPrompt = (prompt: Prompt) => {
-    setEditingPrompt(prompt);
-    setPromptNameInput(prompt.name);
-    setPromptContentInput(prompt.content);
-    setPromptDescriptionInput(prompt.description || '');
-    setShowEditPromptModal(true);
   };
 
   // Salvar prompt editado
@@ -322,7 +402,7 @@ Instruções:
     if (textareaRef.current) {
       const textarea = textareaRef.current;
       textarea.style.height = 'auto';
-      textarea.style.height = Math.min(textarea.scrollHeight, 100) + 'px';
+      textarea.style.height = textarea.scrollHeight + 'px';
     }
   }, []);
 
@@ -442,6 +522,20 @@ Instruções:
         columnValues['e_mail'] = { email: leadEmailInput.trim(), text: leadEmailInput.trim() };
       }
 
+      // Campos de status
+      if (statusValue) {
+        columnValues['status'] = { label: statusValue };
+      }
+      if (status1Value) {
+        columnValues['status_1'] = { label: status1Value };
+      }
+      if (status14Value) {
+        columnValues['status_14'] = { label: status14Value };
+      }
+      if (status152Value) {
+        columnValues['status_152'] = { label: status152Value };
+      }
+
       console.log('Criando lead no board atendimento:', { itemName, phone });
 
       const result = await mondayService.createItem(ATENDIMENTO_BOARD_ID, itemName, columnValues);
@@ -455,6 +549,10 @@ Instruções:
       setShowCreateLeadModal(false);
       setLeadNameInput('');
       setLeadEmailInput('');
+      setStatusValue('');
+      setStatus1Value('');
+      setStatus14Value('');
+      setStatus152Value('');
 
       alert(`Lead "${itemName}" cadastrado com sucesso!\nID: ${result.id}`);
 
@@ -518,12 +616,6 @@ Instruções:
   const getColumnTitle = (colId: string): string => {
     const column = columns.find(col => col.id === colId);
     return column?.title || colId.replace(/[_-]/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-  };
-
-  const handleBackdropClick = (e: React.MouseEvent) => {
-    if (e.target === e.currentTarget) {
-      handleClose();
-    }
   };
 
   // Formatar telefone para exibição
@@ -647,6 +739,19 @@ Instruções:
             <div className="empty-icon">📝</div>
             <p>Nenhum update encontrado</p>
           </div>
+          <div className="update-input-container">
+            <textarea
+              value={newUpdateText}
+              onChange={(e) => setNewUpdateText(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendUpdate(); } }}
+              placeholder="Escrever primeiro update..."
+              disabled={sendingUpdate}
+              rows={2}
+            />
+            <button onClick={handleSendUpdate} disabled={!newUpdateText.trim() || sendingUpdate} className="update-send-btn">
+              {sendingUpdate ? <div className="loading-spinner-tiny"></div> : <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>}
+            </button>
+          </div>
         </div>
       );
     }
@@ -676,6 +781,19 @@ Instruções:
               </div>
             </div>
           ))}
+        </div>
+        <div className="update-input-container">
+          <textarea
+            value={newUpdateText}
+            onChange={(e) => setNewUpdateText(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendUpdate(); } }}
+            placeholder="Escrever update..."
+            disabled={sendingUpdate}
+            rows={2}
+          />
+          <button onClick={handleSendUpdate} disabled={!newUpdateText.trim() || sendingUpdate} className="update-send-btn">
+            {sendingUpdate ? <div className="loading-spinner-tiny"></div> : <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>}
+          </button>
         </div>
       </div>
     );
@@ -799,7 +917,7 @@ Instruções:
               }}
               onKeyPress={handleKeyPress}
               placeholder="Digite uma mensagem..."
-              rows={1}
+              rows={6}
               className="whatsapp-input"
               disabled={sendingMessage}
             />
@@ -842,80 +960,164 @@ Instruções:
     );
   };
 
+  // Função para enviar mensagem ao Copiloto
+  const handleCopilotSend = async () => {
+    if (!copilotInput.trim() || copilotLoading) return;
+    const userMessage: CopilotMessage = {
+      id: `user_${Date.now()}`,
+      role: 'user',
+      content: copilotInput.trim(),
+      timestamp: new Date(),
+    };
+    setCopilotMessages(prev => [...prev, userMessage]);
+    setCopilotInput('');
+    setCopilotLoading(true);
+    try {
+      const leadContext = getLeadContext();
+      const conversationHistory = whatsappMessages.length > 0
+        ? `\n\nÚltimas mensagens do WhatsApp:\n${whatsappMessages.slice(-10).map(m => `[${m.source}] ${m.name}: ${m.content}`).join('\n')}`
+        : '';
+      const systemPrompt = `Você é um assistente especializado em análise de leads e vendas.\nAnalise os dados do lead e responda às perguntas do usuário de forma útil e objetiva.\n\n${leadContext}${conversationHistory}\n\nResponda de forma concisa e profissional.`;
+      const response = await grokService.generateResponse(userMessage.content, { systemPrompt });
+      const assistantMessage: CopilotMessage = {
+        id: `assistant_${Date.now()}`,
+        role: 'assistant',
+        content: response,
+        timestamp: new Date(),
+      };
+      setCopilotMessages(prev => [...prev, assistantMessage]);
+    } catch (error) {
+      console.error('Erro ao enviar mensagem ao copiloto:', error);
+      const errorMessage: CopilotMessage = {
+        id: `error_${Date.now()}`,
+        role: 'assistant',
+        content: 'Desculpe, ocorreu um erro ao processar sua mensagem. Tente novamente.',
+        timestamp: new Date(),
+      };
+      setCopilotMessages(prev => [...prev, errorMessage]);
+    } finally {
+      setCopilotLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (copilotEndRef.current && activeTab === 'copilot') {
+      copilotEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [copilotMessages, activeTab]);
+
+  const renderCopilotTab = () => {
+    return (
+      <div className="tab-content copilot-tab">
+        <div className="copilot-messages">
+          {copilotMessages.length === 0 ? (
+            <div className="copilot-welcome">
+              <div className="copilot-icon">🤖</div>
+              <h3>Copiloto de Vendas</h3>
+              <p>Pergunte qualquer coisa sobre este lead:</p>
+              <div className="copilot-suggestions">
+                <button onClick={() => setCopilotInput('Resuma os dados deste lead')}>Resumir dados</button>
+                <button onClick={() => setCopilotInput('Qual a melhor abordagem para este lead?')}>Sugerir abordagem</button>
+                <button onClick={() => setCopilotInput('Analise a conversa do WhatsApp')}>Analisar conversa</button>
+              </div>
+            </div>
+          ) : (
+            copilotMessages.map((msg) => (
+              <div key={msg.id} className={`copilot-message ${msg.role}`}>
+                <div className="copilot-message-avatar">{msg.role === 'user' ? '👤' : '🤖'}</div>
+                <div className="copilot-message-content"><ReactMarkdown>{msg.content}</ReactMarkdown></div>
+              </div>
+            ))
+          )}
+          {copilotLoading && (
+            <div className="copilot-message assistant">
+              <div className="copilot-message-avatar">🤖</div>
+              <div className="copilot-message-content"><div className="copilot-typing"><span></span><span></span><span></span></div></div>
+            </div>
+          )}
+          <div ref={copilotEndRef} />
+        </div>
+        <div className="copilot-input-container">
+          <textarea value={copilotInput} onChange={(e) => setCopilotInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleCopilotSend(); } }} placeholder="Pergunte sobre o lead..." disabled={copilotLoading} rows={1} />
+          <button onClick={handleCopilotSend} disabled={!copilotInput.trim() || copilotLoading} className="copilot-send-btn">
+            {copilotLoading ? <div className="loading-spinner-tiny"></div> : <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   return (
-    <>
-      <div className="lead-sidebar-backdrop" onClick={handleBackdropClick} />
-      <div className={`lead-sidebar ${isClosing ? 'closing' : ''}`}>
-        {/* Header */}
-        <div className="sidebar-header">
-          <button className="sidebar-close-btn" onClick={handleClose} title="Fechar">
-            <svg viewBox="0 0 24 24" fill="currentColor">
-              <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>
-            </svg>
-          </button>
-          <div className="sidebar-title-section">
-            <h2 className="sidebar-title">{item.name}</h2>
-            {getLeadPhone() && (
-              <div className="sidebar-subtitle">{formatPhone(getLeadPhone())}</div>
-            )}
-          </div>
-          <div className="sidebar-header-actions">
-            {isOrphan ? (
-              <button
-                className="create-lead-header-btn"
-                onClick={() => setShowCreateLeadModal(true)}
-                title="Cadastrar Lead no Monday"
-              >
-                <svg viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
-                </svg>
-              </button>
-            ) : (
-              <button
-                className="monday-link-btn"
-                onClick={handleOpenInMonday}
-                title="Abrir no Monday.com"
-              >
-                <svg viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/>
-                </svg>
-              </button>
-            )}
-          </div>
+    <div className="lead-panel">
+      {/* Header */}
+      <div className="panel-header">
+        <div className="panel-title-section">
+          <h2 className="panel-title">{item.name}</h2>
+          {getLeadPhone() && (
+            <div className="panel-subtitle">{formatPhone(getLeadPhone())}</div>
+          )}
         </div>
+        <div className="panel-header-actions">
+          {isOrphan ? (
+            <button
+              className="panel-action-btn create"
+              onClick={() => setShowCreateLeadModal(true)}
+              title="Cadastrar Lead no Monday"
+            >
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+              </svg>
+              <span>Cadastrar</span>
+            </button>
+          ) : (
+            <button
+              className="panel-action-btn monday"
+              onClick={handleOpenInMonday}
+              title="Abrir no Monday.com"
+            >
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/>
+              </svg>
+              <span>Monday</span>
+            </button>
+          )}
+        </div>
+      </div>
 
-        {/* Tabs */}
-        <div className="sidebar-tabs">
-          <button
-            className={`tab-button ${activeTab === 'whatsapp' ? 'active' : ''}`}
-            onClick={() => setActiveTab('whatsapp')}
-          >
-            <span className="tab-icon">💬</span>
-            <span className="tab-label">WhatsApp</span>
-          </button>
-          <button
-            className={`tab-button ${activeTab === 'details' ? 'active' : ''}`}
-            onClick={() => setActiveTab('details')}
-          >
-            <span className="tab-icon">📋</span>
-            <span className="tab-label">Detalhes</span>
-          </button>
-          <button
-            className={`tab-button ${activeTab === 'updates' ? 'active' : ''}`}
-            onClick={() => setActiveTab('updates')}
-          >
-            <span className="tab-icon">📝</span>
-            <span className="tab-label">Updates</span>
-            {updates.length > 0 && <span className="tab-badge">{updates.length}</span>}
-          </button>
-        </div>
+      {/* Tabs */}
+      <div className="panel-tabs">
+        <button
+          className={`panel-tab ${activeTab === 'whatsapp' ? 'active' : ''}`}
+          onClick={() => setActiveTab('whatsapp')}
+        >
+          💬 WhatsApp
+        </button>
+        <button
+          className={`panel-tab ${activeTab === 'details' ? 'active' : ''}`}
+          onClick={() => setActiveTab('details')}
+        >
+          📋 Detalhes
+        </button>
+        <button
+          className={`panel-tab ${activeTab === 'updates' ? 'active' : ''}`}
+          onClick={() => setActiveTab('updates')}
+        >
+          📝 Updates {updates.length > 0 && <span className="tab-badge">{updates.length}</span>}
+        </button>
+        <button
+          className={`panel-tab ${activeTab === 'copilot' ? 'active' : ''}`}
+          onClick={() => setActiveTab('copilot')}
+        >
+          🤖 Copiloto
+        </button>
+      </div>
 
-        {/* Body */}
-        <div className="sidebar-body">
-          {activeTab === 'details' && renderDetailsTab()}
-          {activeTab === 'updates' && renderUpdatesTab()}
-          {activeTab === 'whatsapp' && renderWhatsAppTab()}
-        </div>
+      {/* Body */}
+      <div className="panel-body">
+        {activeTab === 'details' && renderDetailsTab()}
+        {activeTab === 'updates' && renderUpdatesTab()}
+        {activeTab === 'whatsapp' && renderWhatsAppTab()}
+        {activeTab === 'copilot' && renderCopilotTab()}
       </div>
 
       {/* Modal de Edição de Prompt */}
@@ -1050,6 +1252,62 @@ Instruções:
                 />
               </div>
               <div className="create-lead-form-group">
+                <label htmlFor="lead-status">Status</label>
+                <select
+                  id="lead-status"
+                  value={statusValue}
+                  onChange={(e) => setStatusValue(e.target.value)}
+                  disabled={creatingLead || !statusOptions['status'] || statusOptions['status'].length === 0}
+                >
+                  <option value="">Selecione...</option>
+                  {(statusOptions['status'] || []).map((opt) => (
+                    <option key={opt} value={opt}>{opt}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="create-lead-form-group">
+                <label htmlFor="lead-status-1">Etiquetas</label>
+                <select
+                  id="lead-status-1"
+                  value={status1Value}
+                  onChange={(e) => setStatus1Value(e.target.value)}
+                  disabled={creatingLead || !statusOptions['status_1'] || statusOptions['status_1'].length === 0}
+                >
+                  <option value="">Selecione...</option>
+                  {(statusOptions['status_1'] || []).map((opt) => (
+                    <option key={opt} value={opt}>{opt}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="create-lead-form-group">
+                <label htmlFor="lead-status-14">Qualidade</label>
+                <select
+                  id="lead-status-14"
+                  value={status14Value}
+                  onChange={(e) => setStatus14Value(e.target.value)}
+                  disabled={creatingLead || !statusOptions['status_14'] || statusOptions['status_14'].length === 0}
+                >
+                  <option value="">Selecione...</option>
+                  {(statusOptions['status_14'] || []).map((opt) => (
+                    <option key={opt} value={opt}>{opt}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="create-lead-form-group">
+                <label htmlFor="lead-status-152">Origem</label>
+                <select
+                  id="lead-status-152"
+                  value={status152Value}
+                  onChange={(e) => setStatus152Value(e.target.value)}
+                  disabled={creatingLead || !statusOptions['status_152'] || statusOptions['status_152'].length === 0}
+                >
+                  <option value="">Selecione...</option>
+                  {(statusOptions['status_152'] || []).map((opt) => (
+                    <option key={opt} value={opt}>{opt}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="create-lead-form-group">
                 <label>Telefone</label>
                 <input
                   type="text"
@@ -1086,8 +1344,8 @@ Instruções:
         </div>,
         document.body
       )}
-    </>
+    </div>
   );
 };
 
-export default LeadDetailsModal;
+export default LeadDetailsPanel;

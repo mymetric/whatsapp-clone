@@ -1,4 +1,4 @@
-const { axios } = require('./utils');
+const { axios } = require('../lib/utils');
 
 const ALLOWED_PROXY_HOSTS = new Set([
   'firebasestorage.googleapis.com',

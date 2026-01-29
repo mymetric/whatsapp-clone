@@ -1,4 +1,4 @@
-const { loadMondayApiKey, axios } = require('../utils');
+const { loadMondayApiKey, axios } = require('../../lib/utils');
 
 module.exports = async (req, res) => {
   // CORS headers

@@ -200,11 +200,25 @@ class MondayService {
   /**
    * Busca itens e colunas de um board específico do Monday
    * via backend local (server/server.js), evitando CORS e exposição da API key.
+   * @param boardId - ID do board
+   * @param options - Opções de paginação
+   * @param options.maxItems - Número máximo de itens a retornar (0 = todos)
+   * @param options.orderByRecent - Se true, ordena por data de criação (mais recentes primeiro)
    */
-  async getBoardItemsWithColumns(boardId: number | string): Promise<MondayBoardItemsResponse> {
+  async getBoardItemsWithColumns(
+    boardId: number | string,
+    options?: { maxItems?: number; orderByRecent?: boolean }
+  ): Promise<MondayBoardItemsResponse & { hasMore?: boolean; totalLoaded?: number }> {
     // Chamada para o backend local (Express) em /api/contencioso,
     // que por sua vez fala com a API do Monday.
-    const url = `/api/contencioso?boardId=${boardId}`;
+    const params = new URLSearchParams({ boardId: String(boardId) });
+    if (options?.maxItems) {
+      params.append('maxItems', String(options.maxItems));
+    }
+    if (options?.orderByRecent) {
+      params.append('orderByRecent', 'true');
+    }
+    const url = `/api/contencioso?${params.toString()}`;
 
     console.log('📄 Monday: Buscando itens e colunas do board via backend local', boardId, url);
 
@@ -222,24 +236,24 @@ class MondayService {
     }
 
     const data = await response.json();
-    
+
     // Verificar se retorna novo formato (objeto com columns e items)
     if (data && typeof data === 'object' && 'columns' in data && 'items' in data) {
-      return data as MondayBoardItemsResponse;
+      return data as MondayBoardItemsResponse & { hasMore?: boolean; totalLoaded?: number };
     }
 
     // Compatibilidade com formato antigo (apenas array de itens)
     if (Array.isArray(data)) {
-      return { columns: [], items: data as MondayBoardItem[] };
+      return { columns: [], items: data as MondayBoardItem[], hasMore: false };
     }
 
     // Formato com items dentro do objeto
     if (data && Array.isArray(data.items)) {
-      return { columns: data.columns || [], items: data.items as MondayBoardItem[] };
+      return { columns: data.columns || [], items: data.items as MondayBoardItem[], hasMore: data.hasMore || false };
     }
 
     console.warn('⚠️ Monday: Formato de resposta inesperado para itens do board (backend local)');
-    return { columns: [], items: [] };
+    return { columns: [], items: [], hasMore: false };
   }
 
   // --------------------------------------------------------------------------

@@ -4,6 +4,8 @@ const express = require('express');
 const axios = require('axios');
 const FormData = require('form-data');
 const { PDFParse } = require('pdf-parse');
+const mammoth = require('mammoth');
+const WordExtractor = require('word-extractor');
 const admin = require('firebase-admin');
 require('dotenv').config();
 
@@ -55,6 +57,111 @@ const initFirebase = () => {
 
 // Inicializar Firebase ao carregar o servidor
 initFirebase();
+
+// Cache em memória para mensagens do WhatsApp
+const messagesCache = {
+  data: null,           // Map de phone -> messages[]
+  lastUpdate: null,     // Timestamp da última atualização
+  ttl: 60000,           // 1 minuto de TTL
+  updating: false,      // Flag para evitar múltiplas atualizações simultâneas
+};
+
+// Função para atualizar o cache de mensagens
+const updateMessagesCache = async () => {
+  if (!firestoreDb || messagesCache.updating) return;
+
+  messagesCache.updating = true;
+  try {
+    console.log('🔄 [cache] Atualizando cache de mensagens...');
+    const messagesRef = firestoreDb.collection('messages');
+    const snapshot = await messagesRef.orderBy('timestamp', 'desc').get();
+
+    const phoneMap = new Map();
+
+    snapshot.docs.forEach(doc => {
+      const data = doc.data();
+      const rawPhone = String(data.chat_phone || '').replace(/\D/g, '');
+
+      if (!rawPhone || rawPhone.length < 8) return;
+
+      // Criar variantes do telefone para busca
+      const variants = [rawPhone];
+      if (rawPhone.startsWith('55') && rawPhone.length > 10) {
+        variants.push(rawPhone.substring(2));
+      }
+      if (!rawPhone.startsWith('55') && rawPhone.length >= 10) {
+        variants.push('55' + rawPhone);
+      }
+      // Número local (últimos 8-9 dígitos)
+      const localNum = rawPhone.length >= 9 ? rawPhone.slice(-9) : rawPhone.slice(-8);
+      variants.push(localNum);
+
+      const message = {
+        id: doc.id,
+        audio: data.audio || false,
+        chat_phone: String(data.chat_phone),
+        content: data.content || '',
+        image: data.image || '',
+        name: data.name || '',
+        source: data.source || '',
+        timestamp: data.timestamp?.toDate?.() || data.timestamp || null,
+      };
+
+      // Adicionar mensagem para todas as variantes do telefone
+      variants.forEach(variant => {
+        if (!phoneMap.has(variant)) {
+          phoneMap.set(variant, []);
+        }
+        // Evitar duplicatas
+        const existing = phoneMap.get(variant);
+        if (!existing.find(m => m.id === message.id)) {
+          existing.push(message);
+        }
+      });
+    });
+
+    messagesCache.data = phoneMap;
+    messagesCache.lastUpdate = Date.now();
+    console.log(`✅ [cache] Cache atualizado: ${phoneMap.size} variantes de telefone`);
+  } catch (err) {
+    console.error('❌ [cache] Erro ao atualizar cache:', err.message);
+  } finally {
+    messagesCache.updating = false;
+  }
+};
+
+// Função para obter mensagens do cache
+const getMessagesFromCache = async (phone, limit = 50) => {
+  const normalizedPhone = String(phone).replace(/\D/g, '');
+
+  // Verificar se o cache precisa ser atualizado
+  const cacheAge = Date.now() - (messagesCache.lastUpdate || 0);
+  if (!messagesCache.data || cacheAge > messagesCache.ttl) {
+    await updateMessagesCache();
+  }
+
+  if (!messagesCache.data) return [];
+
+  // Tentar encontrar mensagens por diferentes variantes do telefone
+  const variants = [normalizedPhone];
+  if (normalizedPhone.startsWith('55') && normalizedPhone.length > 10) {
+    variants.push(normalizedPhone.substring(2));
+  }
+  if (!normalizedPhone.startsWith('55') && normalizedPhone.length >= 10) {
+    variants.push('55' + normalizedPhone);
+  }
+  const localNum = normalizedPhone.length >= 9 ? normalizedPhone.slice(-9) : normalizedPhone.slice(-8);
+  variants.push(localNum);
+
+  for (const variant of variants) {
+    const messages = messagesCache.data.get(variant);
+    if (messages && messages.length > 0) {
+      return messages.slice(0, limit);
+    }
+  }
+
+  return [];
+};
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -137,60 +244,13 @@ app.get('/api/firestore/messages', async (req, res) => {
       return res.status(400).json({ error: 'Parâmetro phone é obrigatório' });
     }
 
-    // Normalizar telefone (remover caracteres não numéricos)
     const normalizedPhone = String(phone).replace(/\D/g, '');
-
     console.log(`📱 [server] Buscando mensagens para telefone: ${normalizedPhone}`);
 
-    // Buscar mensagens onde chat_phone corresponde ao telefone
-    // O chat_phone pode ser int64 ou string dependendo do registro
-    const messagesRef = firestoreDb.collection('messages');
+    // Usar cache para busca rápida
+    const messages = await getMessagesFromCache(normalizedPhone, limitParam);
 
-    // Tentar buscar como número e como string
-    const queryNumeric = messagesRef
-      .where('chat_phone', '==', parseInt(normalizedPhone))
-      .orderBy('timestamp', 'desc')
-      .limit(limitParam);
-
-    const queryString = messagesRef
-      .where('chat_phone', '==', normalizedPhone)
-      .orderBy('timestamp', 'desc')
-      .limit(limitParam);
-
-    const [snapshotNumeric, snapshotString] = await Promise.all([
-      queryNumeric.get().catch(() => ({ docs: [] })),
-      queryString.get().catch(() => ({ docs: [] })),
-    ]);
-
-    // Combinar resultados e remover duplicatas
-    const messagesMap = new Map();
-
-    const processDoc = (doc) => {
-      const data = doc.data();
-      messagesMap.set(doc.id, {
-        id: doc.id,
-        audio: data.audio || false,
-        chat_phone: String(data.chat_phone),
-        content: data.content || '',
-        image: data.image || '',
-        name: data.name || '',
-        source: data.source || '',
-        timestamp: data.timestamp?.toDate?.() || data.timestamp || null,
-      });
-    };
-
-    snapshotNumeric.docs?.forEach(processDoc);
-    snapshotString.docs?.forEach(processDoc);
-
-    const messages = Array.from(messagesMap.values())
-      .sort((a, b) => {
-        const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
-        const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
-        return timeB - timeA; // Mais recentes primeiro
-      })
-      .slice(0, limitParam);
-
-    console.log(`✅ [server] Encontradas ${messages.length} mensagens para ${normalizedPhone}`);
+    console.log(`✅ [server] Encontradas ${messages.length} mensagens para ${normalizedPhone} (cache)`);
 
     return res.json({ messages, count: messages.length });
   } catch (err) {
@@ -362,6 +422,8 @@ app.get('/api/contencioso/columns', async (req, res) => {
 
 app.get('/api/contencioso', async (req, res) => {
   const boardId = Number(req.query.boardId) || 632454515;
+  const maxItems = Number(req.query.maxItems) || 0; // 0 = todos os itens
+  const orderByRecent = req.query.orderByRecent === 'true'; // Ordenar por data de criação
   const apiKey = loadMondayApiKey();
 
   if (!apiKey) {
@@ -371,9 +433,41 @@ app.get('/api/contencioso', async (req, res) => {
   const PAGE_LIMIT = 500;
 
   // Monday: `items_page` é paginado via `cursor`.
-  // 1) Primeira página: items_page(limit: 500)
+  // Agora com suporte a query_params para ordenar por data de criação
+  // 1) Primeira página: items_page(limit: 500, query_params: ...)
   // 2) Próximas: items_page(limit: 500, cursor: "...")
-  const firstPageQuery = `
+  const firstPageQuery = orderByRecent ? `
+    query ($boardId: [ID!], $limit: Int!) {
+      boards (ids: $boardId) {
+        id
+        name
+        columns {
+          id
+          title
+          type
+          settings_str
+        }
+        items_page (limit: $limit, query_params: {order_by: [{column_id: "__creation_log__", direction: desc}]}) {
+          cursor
+          items {
+            id
+            name
+            created_at
+            column_values {
+              id
+              text
+              type
+              column {
+                id
+                title
+                type
+              }
+            }
+          }
+        }
+      }
+    }
+  ` : `
     query ($boardId: [ID!], $limit: Int!) {
       boards (ids: $boardId) {
         id
@@ -440,7 +534,7 @@ app.get('/api/contencioso', async (req, res) => {
   `;
 
     try {
-    console.log('📄 [server] Buscando itens do board no Monday (com paginação):', boardId);
+    console.log(`📄 [server] Buscando itens do board no Monday (com paginação)${maxItems ? ` (max: ${maxItems})` : ''}${orderByRecent ? ' (ordenado por data)' : ''}:`, boardId);
 
     const allItems = [];
     const seenIds = new Set();
@@ -448,6 +542,7 @@ app.get('/api/contencioso', async (req, res) => {
     let page = 0;
     const MAX_PAGES = 200; // safety guard (200 * 500 = 100k itens)
     let boardColumns = null;
+    let hasMore = false;
 
     while (page < MAX_PAGES) {
       page += 1;
@@ -481,16 +576,16 @@ app.get('/api/contencioso', async (req, res) => {
 
       const boards = data?.data?.boards;
       if (!Array.isArray(boards) || boards.length === 0) {
-        return res.json({ columns: [], items: [] });
+        return res.json({ columns: [], items: [], hasMore: false });
       }
 
       const board = boards[0];
-      
+
       // Salvar colunas apenas na primeira página
       if (!boardColumns && board.columns && Array.isArray(board.columns)) {
         boardColumns = board.columns;
       }
-      
+
       const pageObj = board?.items_page;
       const items = Array.isArray(pageObj?.items) ? pageObj.items : [];
 
@@ -499,17 +594,32 @@ app.get('/api/contencioso', async (req, res) => {
         if (seenIds.has(item.id)) continue;
         seenIds.add(item.id);
         allItems.push(item);
+
+        // Se atingiu o limite máximo, parar
+        if (maxItems > 0 && allItems.length >= maxItems) {
+          hasMore = !!pageObj?.cursor || items.length === PAGE_LIMIT;
+          break;
+        }
+      }
+
+      // Se atingiu o limite máximo, parar
+      if (maxItems > 0 && allItems.length >= maxItems) {
+        break;
       }
 
       cursor = pageObj?.cursor || null;
 
       // Se não houver cursor, acabou.
       if (!cursor) break;
+
+      hasMore = true;
     }
 
     return res.json({
       columns: boardColumns || [],
-      items: allItems
+      items: allItems,
+      hasMore: maxItems > 0 ? hasMore : false,
+      totalLoaded: allItems.length
     });
   } catch (err) {
     console.error('❌ [server] Erro ao chamar API do Monday:', err.response?.data || err.message);
@@ -861,8 +971,41 @@ async function extractTextFromFile(file) {
       }
     }
     
+    // DOCX (Word moderno) - usando mammoth
+    if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+        filename.endsWith('.docx')) {
+      console.log(`📄 Detectado como DOCX: ${file.filename}`);
+      try {
+        const result = await mammoth.extractRawText({ buffer: fileBuffer });
+        const extractedText = result.value || '';
+        console.log(`✅ DOCX processado: ${extractedText.length} caracteres extraídos`);
+        if (result.messages && result.messages.length > 0) {
+          console.log(`ℹ️ Mensagens do mammoth:`, result.messages);
+        }
+        return extractedText;
+      } catch (docxError) {
+        console.error(`❌ Erro ao processar DOCX ${file.filename}:`, docxError.message);
+        return null;
+      }
+    }
+
+    // DOC (Word antigo) - usando word-extractor
+    if (mimeType === 'application/msword' || filename.endsWith('.doc')) {
+      console.log(`📄 Detectado como DOC: ${file.filename}`);
+      try {
+        const extractor = new WordExtractor();
+        const doc = await extractor.extract(fileBuffer);
+        const extractedText = doc.getBody() || '';
+        console.log(`✅ DOC processado: ${extractedText.length} caracteres extraídos`);
+        return extractedText;
+      } catch (docError) {
+        console.error(`❌ Erro ao processar DOC ${file.filename}:`, docError.message);
+        return null;
+      }
+    }
+
     // Texto simples - verificar por MIME type ou extensão
-    if (mimeType.startsWith('text/') || 
+    if (mimeType.startsWith('text/') ||
         filename.match(/\.(txt|md|json|csv|log|xml|html|htm)$/)) {
       console.log(`📄 Detectado como arquivo de texto: ${file.filename}`);
       try {
@@ -1273,6 +1416,82 @@ app.post('/api/monday/update', async (req, res) => {
     return res.status(status).json({
       error: 'Erro ao criar update no Monday',
       details: err.response?.data || err.message,
+    });
+  }
+});
+
+/**
+ * Busca todos os telefones únicos da collection messages do Firestore
+ * Retorna: { phone, messageCount, lastMessage: { content, timestamp, source } }
+ */
+app.get('/api/firestore/unique-phones', async (req, res) => {
+  try {
+    if (!firestoreDb) {
+      return res.status(500).json({ error: 'Firebase não configurado no servidor' });
+    }
+
+    console.log('📱 [server] Buscando telefones únicos do Firestore...');
+
+    // Buscar todas as mensagens
+    const messagesRef = firestoreDb.collection('messages');
+    const snapshot = await messagesRef.orderBy('timestamp', 'desc').get();
+
+    if (snapshot.empty) {
+      console.log('ℹ️ [server] Nenhuma mensagem encontrada no Firestore');
+      return res.json({ phones: [], count: 0 });
+    }
+
+    // Agrupar mensagens por telefone
+    const phoneMap = new Map();
+
+    snapshot.docs.forEach(doc => {
+      const data = doc.data();
+      const phone = String(data.chat_phone || '').replace(/\D/g, '');
+
+      if (!phone || phone.length < 10) return;
+
+      if (!phoneMap.has(phone)) {
+        phoneMap.set(phone, {
+          phone,
+          messageCount: 0,
+          lastMessage: null,
+          contactName: null,
+        });
+      }
+
+      const entry = phoneMap.get(phone);
+      entry.messageCount++;
+
+      // Atualizar última mensagem (já ordenado por timestamp desc)
+      if (!entry.lastMessage) {
+        entry.lastMessage = {
+          content: data.content || '',
+          timestamp: data.timestamp?.toDate?.() || data.timestamp || null,
+          source: data.source || '',
+        };
+      }
+
+      // Pegar nome do contato se disponível
+      if (!entry.contactName && data.name && data.source === 'Contact') {
+        entry.contactName = data.name;
+      }
+    });
+
+    // Converter Map para array e ordenar por última mensagem
+    const phones = Array.from(phoneMap.values()).sort((a, b) => {
+      const timeA = a.lastMessage?.timestamp ? new Date(a.lastMessage.timestamp).getTime() : 0;
+      const timeB = b.lastMessage?.timestamp ? new Date(b.lastMessage.timestamp).getTime() : 0;
+      return timeB - timeA;
+    });
+
+    console.log(`✅ [server] Encontrados ${phones.length} telefones únicos`);
+
+    return res.json({ phones, count: phones.length });
+  } catch (err) {
+    console.error('❌ [server] Erro ao buscar telefones únicos do Firestore:', err);
+    return res.status(500).json({
+      error: 'Erro ao buscar telefones únicos',
+      details: err.message,
     });
   }
 });

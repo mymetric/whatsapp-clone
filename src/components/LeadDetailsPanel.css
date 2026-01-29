@@ -1,0 +1,1150 @@
+/* Lead Details Panel - Inline (não modal) */
+.lead-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: white;
+}
+
+/* Header */
+.panel-header {
+  padding: 12px 16px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+
+.panel-title-section {
+  flex: 1;
+  min-width: 0;
+}
+
+.panel-title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.panel-subtitle {
+  font-size: 0.75rem;
+  opacity: 0.85;
+  margin-top: 2px;
+}
+
+.panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.panel-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.panel-action-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.panel-action-btn.monday {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+}
+
+.panel-action-btn.monday:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.panel-action-btn.create {
+  background: #10b981;
+  color: white;
+}
+
+.panel-action-btn.create:hover {
+  background: #059669;
+}
+
+/* Tabs */
+.panel-tabs {
+  display: flex;
+  background: #f8f9fa;
+  border-bottom: 1px solid #e0e0e0;
+  flex-shrink: 0;
+}
+
+.panel-tab {
+  flex: 1;
+  padding: 10px 8px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #667781;
+  transition: all 0.2s;
+  position: relative;
+}
+
+.panel-tab:hover {
+  background: rgba(102, 126, 234, 0.05);
+  color: #333;
+}
+
+.panel-tab.active {
+  color: #667eea;
+  background: white;
+}
+
+.panel-tab.active::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.panel-tab .tab-badge {
+  background: #667eea;
+  color: white;
+  font-size: 0.6rem;
+  padding: 1px 5px;
+  border-radius: 8px;
+  margin-left: 4px;
+}
+
+/* Body */
+.panel-body {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Reutiliza estilos de LeadDetailsModal */
+.tab-content {
+  flex: 1;
+}
+
+/* Details Tab */
+.details-tab {
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.sidebar-info-section {
+  margin-bottom: 16px;
+}
+
+.info-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.info-item {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: #f8f9fa;
+  border-radius: 8px;
+}
+
+.info-icon {
+  font-size: 1rem;
+  opacity: 0.7;
+}
+
+.info-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.info-label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: #667781;
+  text-transform: uppercase;
+}
+
+.info-value {
+  font-size: 0.85rem;
+  color: #111b21;
+  font-weight: 500;
+}
+
+.columns-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.column-item {
+  padding: 10px 12px;
+  background: white;
+  border: 1px solid #e9ecef;
+  border-radius: 8px;
+}
+
+.column-label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: #667781;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.column-value {
+  font-size: 0.9rem;
+  color: #111b21;
+  word-break: break-word;
+}
+
+/* WhatsApp Tab */
+.whatsapp-tab {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 0 !important;
+  background: #e5ddd5;
+}
+
+.whatsapp-header-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #f8f9fa;
+  border-bottom: 1px solid #e0e0e0;
+  flex-shrink: 0;
+}
+
+.whatsapp-phone-label {
+  font-weight: 600;
+  font-size: 0.8rem;
+  color: #111b21;
+}
+
+.whatsapp-count {
+  font-size: 0.65rem;
+  background: #e0e0e0;
+  color: #667781;
+  padding: 2px 6px;
+  border-radius: 8px;
+}
+
+.whatsapp-refresh-btn {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: #667781;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 50%;
+  font-size: 0.85rem;
+}
+
+.whatsapp-refresh-btn:hover {
+  background: rgba(102, 126, 234, 0.1);
+  color: #667eea;
+}
+
+.whatsapp-messages-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  background: #f5f5f5;
+}
+
+.whatsapp-message {
+  padding: 6px 10px;
+  border-radius: 8px;
+  max-width: 85%;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.1);
+}
+
+.whatsapp-message.contact {
+  background: white;
+  align-self: flex-start;
+  border-top-left-radius: 0;
+}
+
+.whatsapp-message.bot {
+  background: #e0e7ff;
+  align-self: flex-end;
+  border-top-right-radius: 0;
+}
+
+.whatsapp-message-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+  font-size: 0.65rem;
+}
+
+.whatsapp-message-name {
+  font-weight: 600;
+  color: #667eea;
+}
+
+.whatsapp-message.bot .whatsapp-message-name {
+  color: #764ba2;
+}
+
+.whatsapp-message-time {
+  color: #8696a0;
+  font-size: 0.6rem;
+  margin-left: auto;
+}
+
+.whatsapp-message-content {
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: #111b21;
+  word-break: break-word;
+}
+
+.whatsapp-audio-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #667eea;
+  color: white;
+  font-size: 0.7rem;
+  padding: 3px 6px;
+  border-radius: 4px;
+  margin-bottom: 4px;
+}
+
+.whatsapp-image-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #e0e7ff;
+  color: #667eea;
+  font-size: 0.7rem;
+  padding: 3px 6px;
+  border-radius: 4px;
+  margin-bottom: 4px;
+  text-decoration: none;
+}
+
+.whatsapp-image-link:hover {
+  background: #c7d2fe;
+}
+
+/* Prompts Section */
+.prompts-section {
+  padding: 8px 10px;
+  background: linear-gradient(to bottom, #f8f9fa, #ffffff);
+  border-top: 1px solid #e9ecef;
+  flex-shrink: 0;
+}
+
+.prompts-header {
+  display: none;
+}
+
+.prompts-list {
+  display: inline-flex !important;
+  flex-flow: row wrap !important;
+  gap: 3px;
+  align-items: center;
+}
+
+.prompt-item {
+  display: inline-flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 2px;
+}
+
+.prompt-use-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border: none;
+  border-radius: 14px;
+  cursor: pointer;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #fff;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 6px rgba(102, 126, 234, 0.25);
+}
+
+.prompt-use-btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+  background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+}
+
+.prompt-use-btn:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 2px 6px rgba(102, 126, 234, 0.3);
+}
+
+.prompt-use-btn:disabled {
+  cursor: wait;
+  opacity: 0.7;
+  transform: none;
+}
+
+.prompt-use-btn.using {
+  background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+  box-shadow: 0 2px 8px rgba(40, 167, 69, 0.3);
+}
+
+.prompt-name {
+  white-space: nowrap;
+}
+
+.prompt-edit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: rgba(102, 126, 234, 0.1);
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 0.65rem;
+  color: #667eea;
+  transition: all 0.2s ease;
+}
+
+.prompt-edit-btn:hover {
+  background: rgba(102, 126, 234, 0.2);
+  color: #5a67d8;
+  transform: scale(1.1);
+}
+
+.prompt-loading-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top: 2px solid white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+/* WhatsApp Input */
+.whatsapp-input-container {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #f8f9fa;
+  flex-shrink: 0;
+}
+
+.whatsapp-input {
+  flex: 1;
+  padding: 10px 14px;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  resize: vertical;
+  max-height: none;
+  min-height: 160px;
+  height: 160px;
+  line-height: 1.5;
+  font-family: inherit;
+  outline: none;
+  background: white;
+}
+
+.whatsapp-input:focus {
+  box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.3);
+}
+
+.whatsapp-send-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.whatsapp-send-btn:disabled {
+  background: #8696a0;
+  cursor: not-allowed;
+}
+
+.whatsapp-cancel-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: #8696a0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9rem;
+}
+
+.whatsapp-cancel-btn:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.whatsapp-input-placeholder {
+  padding: 8px 10px;
+  background: #f8f9fa;
+  flex-shrink: 0;
+}
+
+.whatsapp-write-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 14px;
+  background: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: #667781;
+  width: 100%;
+}
+
+.whatsapp-write-btn:hover {
+  background: #f0f4ff;
+  color: #667eea;
+}
+
+/* Updates Tab */
+.updates-tab {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 0 !important;
+}
+
+.updates-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.updates-loading,
+.updates-error,
+.updates-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 150px;
+  color: #667781;
+}
+
+.loading-spinner-small {
+  width: 24px;
+  height: 24px;
+  border: 3px solid #f0f0f0;
+  border-top: 3px solid #667eea;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-bottom: 12px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.update-item {
+  background: white;
+  border: 1px solid #e9ecef;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.update-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.update-creator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.creator-name {
+  color: #667eea;
+}
+
+.update-date {
+  font-size: 0.7rem;
+  color: #8696a0;
+}
+
+.update-body {
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: #111b21;
+}
+
+.update-body.markdown-content p {
+  margin: 0 0 8px 0;
+}
+
+.update-body.markdown-content p:last-child {
+  margin-bottom: 0;
+}
+
+/* Update Input */
+.update-input-container {
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  background: #f8f9fa;
+  border-top: 1px solid #e0e0e0;
+  margin-top: auto;
+}
+
+.update-input-container textarea {
+  flex: 1;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 0.85rem;
+  resize: none;
+  outline: none;
+  font-family: inherit;
+  min-height: 40px;
+}
+
+.update-input-container textarea:focus {
+  border-color: #667eea;
+}
+
+.update-send-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  align-self: flex-end;
+  transition: all 0.2s;
+}
+
+.update-send-btn:hover:not(:disabled) {
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+.update-send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Empty states */
+.whatsapp-placeholder,
+.whatsapp-loading,
+.whatsapp-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  text-align: center;
+  color: #667781;
+  background: #f5f5f5;
+  padding: 30px 20px;
+}
+
+.whatsapp-icon,
+.empty-icon {
+  font-size: 2.5rem;
+  margin-bottom: 12px;
+  opacity: 0.6;
+}
+
+.retry-btn-small {
+  padding: 8px 16px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+/* Orphan notice */
+.orphan-details-notice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 30px 20px;
+  min-height: 200px;
+}
+
+.orphan-details-notice .notice-icon {
+  font-size: 2.5rem;
+  margin-bottom: 16px;
+  opacity: 0.6;
+}
+
+.orphan-details-notice h3 {
+  margin: 0 0 8px 0;
+  font-size: 1rem;
+  color: #333;
+}
+
+.orphan-details-notice p {
+  margin: 0 0 20px 0;
+  color: #667781;
+  font-size: 0.85rem;
+}
+
+.create-lead-btn-large {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 24px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.create-lead-btn-large:hover {
+  transform: translateY(-1px);
+}
+
+/* Loading spinner tiny */
+.loading-spinner-tiny {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top: 2px solid white;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+/* Mensagem sendo enviada */
+.whatsapp-message.sending {
+  opacity: 0.7;
+}
+
+/* Modais (renderizados via portal) */
+.edit-prompt-modal-overlay,
+.create-lead-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: 20px;
+}
+
+.edit-prompt-modal,
+.create-lead-modal {
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+  max-width: 500px;
+  width: 100%;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.edit-prompt-modal-header,
+.create-lead-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid #e9ecef;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.edit-prompt-modal-header h3,
+.create-lead-modal-header h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.edit-prompt-modal-close,
+.create-lead-modal-close {
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  color: white;
+  font-size: 1.5rem;
+  cursor: pointer;
+  padding: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  line-height: 1;
+}
+
+.edit-prompt-modal-close:hover,
+.create-lead-modal-close:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.edit-prompt-modal-content,
+.create-lead-modal-content {
+  padding: 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.edit-prompt-form-group,
+.create-lead-form-group {
+  margin-bottom: 16px;
+}
+
+.edit-prompt-form-group label,
+.create-lead-form-group label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #333;
+}
+
+.edit-prompt-form-group input,
+.edit-prompt-form-group textarea,
+.create-lead-form-group input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid #e9ecef;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.edit-prompt-form-group input:focus,
+.edit-prompt-form-group textarea:focus,
+.create-lead-form-group input:focus {
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+.edit-prompt-form-group textarea {
+  font-family: inherit;
+  resize: vertical;
+  min-height: 120px;
+  line-height: 1.5;
+}
+
+.create-lead-input-disabled {
+  background: #f8f9fa !important;
+  color: #6c757d;
+}
+
+.create-lead-error-message {
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: #fee2e2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  color: #dc2626;
+  font-size: 0.85rem;
+}
+
+.edit-prompt-modal-actions,
+.create-lead-modal-actions {
+  padding: 16px 20px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid #e9ecef;
+  background: #f8f9fa;
+}
+
+.edit-prompt-cancel-button,
+.create-lead-cancel-button {
+  background: white;
+  color: #6c757d;
+  border: 1px solid #e9ecef;
+  border-radius: 6px;
+  padding: 10px 18px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.edit-prompt-submit-button,
+.create-lead-submit-button {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 10px 18px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.edit-prompt-submit-button:disabled,
+.create-lead-submit-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Copiloto Tab */
+.copilot-tab {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.copilot-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.copilot-welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 32px 16px;
+  color: #666;
+}
+
+.copilot-icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+}
+
+.copilot-welcome h3 {
+  margin: 0 0 8px 0;
+  color: #333;
+  font-size: 1.2rem;
+}
+
+.copilot-welcome p {
+  margin: 0 0 16px 0;
+  font-size: 0.9rem;
+}
+
+.copilot-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
+.copilot-suggestions button {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  border-radius: 16px;
+  padding: 8px 14px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.copilot-suggestions button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+.copilot-message {
+  display: flex;
+  gap: 10px;
+  max-width: 90%;
+}
+
+.copilot-message.user {
+  align-self: flex-end;
+  flex-direction: row-reverse;
+}
+
+.copilot-message.assistant {
+  align-self: flex-start;
+}
+
+.copilot-message-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #f0f0f0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.copilot-message.user .copilot-message-avatar {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.copilot-message-content {
+  background: #f5f5f5;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.copilot-message.user .copilot-message-content {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.copilot-message-content p {
+  margin: 0 0 8px 0;
+}
+
+.copilot-message-content p:last-child {
+  margin-bottom: 0;
+}
+
+.copilot-message-content ul, .copilot-message-content ol {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
+.copilot-typing {
+  display: flex;
+  gap: 4px;
+  padding: 4px 0;
+}
+
+.copilot-typing span {
+  width: 8px;
+  height: 8px;
+  background: #999;
+  border-radius: 50%;
+  animation: copilotBounce 1.4s infinite ease-in-out;
+}
+
+.copilot-typing span:nth-child(1) { animation-delay: -0.32s; }
+.copilot-typing span:nth-child(2) { animation-delay: -0.16s; }
+
+@keyframes copilotBounce {
+  0%, 80%, 100% { transform: scale(0); }
+  40% { transform: scale(1); }
+}
+
+.copilot-input-container {
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  background: #f8f9fa;
+  border-top: 1px solid #e0e0e0;
+}
+
+.copilot-input-container textarea {
+  flex: 1;
+  border: 1px solid #ddd;
+  border-radius: 20px;
+  padding: 10px 16px;
+  font-size: 0.85rem;
+  resize: none;
+  outline: none;
+  font-family: inherit;
+  max-height: 100px;
+}
+
+.copilot-input-container textarea:focus {
+  border-color: #667eea;
+}
+
+.copilot-send-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.2s;
+}
+
+.copilot-send-btn:hover:not(:disabled) {
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+.copilot-send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

@@ -7,7 +7,7 @@ import Login from './components/Login';
 import Header from './components/Header';
 import PromptsManager from './components/PromptsManager';
 import ContenciosoTab from './components/ContenciosoTab';
-import Board607533664Tab from './components/Board607533664Tab';
+import ConversasLeadsTab from './components/ConversasLeadsTab';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { Phone, Message } from './types';
 import { phoneService } from './services/api';
@@ -22,7 +22,7 @@ const AppContent: React.FC = () => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showPromptsPage, setShowPromptsPage] = useState(false);
   const [showContenciosoPage, setShowContenciosoPage] = useState(false);
-  const [showBoard607533664Page, setShowBoard607533664Page] = useState(false);
+  const [showConversasLeadsPage, setShowConversasLeadsPage] = useState(true);
   const { isAuthenticated } = useAuth();
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const lastActivityRef = useRef<Date>(new Date());
@@ -41,7 +41,7 @@ const AppContent: React.FC = () => {
       const timeSinceActivity = Date.now() - lastActivityRef.current.getTime();
       const isTabVisible = !document.hidden;
       const hasRecentActivity = timeSinceActivity < 5 * 60 * 1000; // 5 minutos
-      
+
       if (isTabVisible && hasRecentActivity) {
         loadPhones(true); // true indica que é uma atualização automática
       }
@@ -53,7 +53,7 @@ const AppContent: React.FC = () => {
       loadPhones();
       // Iniciar polling automático a cada 30 segundos
       startAutoRefresh();
-      
+
       // Adicionar listeners para otimização
       const handleActivity = () => {
         lastActivityRef.current = new Date();
@@ -127,7 +127,7 @@ const AppContent: React.FC = () => {
   const handleWhatsAppClick = () => {
     setShowPromptsPage(false);
     setShowContenciosoPage(false);
-    setShowBoard607533664Page(false);
+    setShowConversasLeadsPage(false);
   };
 
   if (!isAuthenticated) {
@@ -160,12 +160,10 @@ const AppContent: React.FC = () => {
           onContenciosoClick={() => {
             setShowPromptsPage(false);
             setShowContenciosoPage(true);
-            setShowBoard607533664Page(false);
           }}
-          onBoard607533664Click={() => {
+          onConversasLeadsClick={() => {
             setShowPromptsPage(false);
-            setShowContenciosoPage(false);
-            setShowBoard607533664Page(true);
+            setShowConversasLeadsPage(true);
           }}
         />
         <div className="prompts-page-container">
@@ -183,10 +181,9 @@ const AppContent: React.FC = () => {
           onWhatsAppClick={handleWhatsAppClick}
           onPromptsClick={() => setShowPromptsPage(true)}
           onContenciosoClick={() => setShowContenciosoPage(false)}
-          onBoard607533664Click={() => {
-            setShowPromptsPage(false);
+          onConversasLeadsClick={() => {
             setShowContenciosoPage(false);
-            setShowBoard607533664Page(true);
+            setShowConversasLeadsPage(true);
           }}
         />
         <div className="prompts-page-container">
@@ -196,22 +193,24 @@ const AppContent: React.FC = () => {
     );
   }
 
-  if (showBoard607533664Page) {
+  if (showConversasLeadsPage) {
     return (
       <div className="app fade-in">
         <Header
-          activeTab="atendimento"
+          activeTab="conversas-leads"
           onWhatsAppClick={handleWhatsAppClick}
-          onPromptsClick={() => setShowPromptsPage(true)}
-          onContenciosoClick={() => {
-            setShowPromptsPage(false);
-            setShowContenciosoPage(true);
-            setShowBoard607533664Page(false);
+          onPromptsClick={() => {
+            setShowConversasLeadsPage(false);
+            setShowPromptsPage(true);
           }}
-          onBoard607533664Click={() => setShowBoard607533664Page(false)}
+          onContenciosoClick={() => {
+            setShowConversasLeadsPage(false);
+            setShowContenciosoPage(true);
+          }}
+          onConversasLeadsClick={() => setShowConversasLeadsPage(false)}
         />
         <div className="prompts-page-container">
-          <Board607533664Tab />
+          <ConversasLeadsTab />
         </div>
       </div>
     );
@@ -224,7 +223,7 @@ const AppContent: React.FC = () => {
         onWhatsAppClick={handleWhatsAppClick}
         onPromptsClick={() => setShowPromptsPage(true)}
         onContenciosoClick={() => setShowContenciosoPage(true)}
-        onBoard607533664Click={() => setShowBoard607533664Page(true)}
+        onConversasLeadsClick={() => setShowConversasLeadsPage(true)}
       />
       <div className="app-main">
         <ChatList
@@ -236,11 +235,11 @@ const AppContent: React.FC = () => {
           lastUpdate={lastUpdate}
           onManualRefresh={handleManualRefresh}
         />
-        <ChatWindow 
-          selectedPhone={selectedPhone} 
+        <ChatWindow
+          selectedPhone={selectedPhone}
           onMessagesChange={setCurrentMessages}
         />
-        <CopilotSidebar 
+        <CopilotSidebar
           selectedPhone={selectedPhone}
           messages={currentMessages}
         />

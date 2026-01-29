@@ -1,4 +1,4 @@
-const { loadGrokApiKey, axios } = require('../utils');
+const { loadGrokApiKey, axios } = require('../../lib/utils');
 
 module.exports = async (req, res) => {
   // CORS headers

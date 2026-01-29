@@ -73,7 +73,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone, onMessagesChange
     if (textareaRef.current) {
       const textarea = textareaRef.current;
       textarea.style.height = 'auto';
-      textarea.style.height = Math.min(textarea.scrollHeight, 100) + 'px';
+      textarea.style.height = textarea.scrollHeight + 'px';
     }
   }, []);
 
@@ -425,8 +425,11 @@ ${conversationHistory}`;
 
   // Ajustar altura do textarea quando o texto mudar
   useEffect(() => {
-    adjustTextareaHeight();
-  }, [newMessage, adjustTextareaHeight]);
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px';
+    }
+  }, [newMessage]);
 
   // Carregar prompts quando o componente montar
   useEffect(() => {
@@ -922,15 +925,23 @@ Se sua resposta estiver ficando muito longa, resuma os pontos principais de form
       // Colocar a resposta no campo de edição ao invés de enviar diretamente
       setNewMessage(response);
       setShowInput(true);
-      
-      // Ajustar altura do textarea após definir o texto
+
+      // Ajustar altura do textarea após definir o texto (múltiplos timeouts para garantir)
       setTimeout(() => {
-        adjustTextareaHeight();
         if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto';
+          textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px';
           textareaRef.current.focus();
         }
-      }, 0);
-      
+      }, 100);
+
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto';
+          textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px';
+        }
+      }, 300);
+
       console.log('✅ Resposta gerada com prompt e colocada no campo de edição');
       
     } catch (error) {
@@ -1242,7 +1253,7 @@ Se sua resposta estiver ficando muito longa, resuma os pontos principais de form
               onChange={handleInputChange}
               onKeyPress={handleKeyPress}
               placeholder="Digite uma mensagem..."
-              rows={1}
+              rows={6}
               className="message-input"
               disabled={loading}
             />

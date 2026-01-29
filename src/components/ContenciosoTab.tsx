@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { mondayService, MondayUpdate } from '../services/mondayService';
-import { firestoreRestAttachmentService, Attachment } from '../services/firestoreRestService';
+import { firestoreRestAttachmentService, firestoreRestContenciosoPromptService, Attachment } from '../services/firestoreRestService';
 import { Prompt } from '../services/api';
 import ContenciosoPromptsManager from './ContenciosoPromptsManager';
 import { contenciosoCacheService } from '../services/contenciosoCacheService';
@@ -40,6 +40,8 @@ const ContenciosoTab: React.FC = () => {
   const [copilotLoading, setCopilotLoading] = useState(false);
   const [copilotError, setCopilotError] = useState<string | null>(null);
   const [showPromptsManager, setShowPromptsManager] = useState(false);
+  const [showPromptsDropdown, setShowPromptsDropdown] = useState(false);
+  const [availablePrompts, setAvailablePrompts] = useState<Prompt[]>([]);
   const [selectedPrompt, setSelectedPrompt] = useState<Prompt | null>(null);
   const [attachmentCounts, setAttachmentCounts] = useState<Record<string, number>>({});
   const [loadingAttachmentCounts, setLoadingAttachmentCounts] = useState(false);
@@ -55,6 +57,8 @@ const ContenciosoTab: React.FC = () => {
 
   // Estado para arquivos locais (upload do usuário)
   const [localFiles, setLocalFiles] = useState<{id: string; filename: string; mimeType: string; base64: string}[]>([]);
+  // Estado para maximizar o chat
+  const [chatMaximized, setChatMaximized] = useState(false);
 
   /**
    * Carrega itens do cache IndexedDB (assíncrono)
@@ -238,6 +242,19 @@ const ContenciosoTab: React.FC = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Carregar prompts disponíveis
+  useEffect(() => {
+    const loadPrompts = async () => {
+      try {
+        const prompts = await firestoreRestContenciosoPromptService.getPrompts();
+        setAvailablePrompts(prompts);
+      } catch (err) {
+        console.error('Erro ao carregar prompts:', err);
+      }
+    };
+    loadPrompts();
+  }, []);
+
   const formatDate = (dateString?: string) => {
     if (!dateString) return 'Data não disponível';
     const date = new Date(dateString);
@@ -328,6 +345,8 @@ const ContenciosoTab: React.FC = () => {
     setUpdateError(null);
     setUpdateSuccess(false);
     setLocalFiles([]); // Limpar arquivos locais
+    setChatMaximized(false); // Resetar maximização do chat
+    setShowPromptsDropdown(false); // Fechar dropdown de prompts
   };
 
   const handleAttachmentDragStart = (attachment: Attachment, event: React.DragEvent<HTMLLIElement>) => {
@@ -897,8 +916,8 @@ Use esse contexto para responder perguntas sobre o processo, andamentos e riscos
               </button>
             </div>
 
-            <div className="contencioso-ficha-body">
-              <div className="contencioso-ficha-column contencioso-ficha-attachments">
+            <div className={`contencioso-ficha-body${chatMaximized ? ' contencioso-ficha-body--chat-maximized' : ''}`}>
+              {!chatMaximized && <div className="contencioso-ficha-column contencioso-ficha-attachments">
                 <div className="contencioso-ficha-tabs">
                   <button
                     type="button"
@@ -1191,9 +1210,24 @@ Use esse contexto para responder perguntas sobre o processo, andamentos e riscos
                     </form>
                   </div>
                 )}
-              </div>
+              </div>}
 
               <div className="contencioso-ficha-column contencioso-ficha-copilot">
+                <button
+                  className="contencioso-copilot-maximize-btn"
+                  onClick={() => setChatMaximized(!chatMaximized)}
+                  title={chatMaximized ? 'Restaurar' : 'Maximizar chat'}
+                >
+                  {chatMaximized ? (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/>
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+                    </svg>
+                  )}
+                </button>
                 <div className="contencioso-copilot-badge">IA</div>
                 <h3>Copiloto IA do processo</h3>
                 <p className="contencioso-ficha-muted">
@@ -1287,10 +1321,6 @@ Use esse contexto para responder perguntas sobre o processo, andamentos e riscos
                     {copilotMessages.length === 0 ? (
                       <div className="contencioso-copilot-chat-empty">
                         <div className="contencioso-copilot-chat-icon">🤖</div>
-                        <p>Comece fazendo uma pergunta sobre o processo.</p>
-                        <p className="contencioso-ficha-muted">
-                          Quanto mais anexos você selecionar, mais contexto o copiloto terá.
-                        </p>
                       </div>
                     ) : (
                       copilotMessages.map((msg, idx) => (
@@ -1347,13 +1377,54 @@ Use esse contexto para responder perguntas sobre o processo, andamentos e riscos
                     </div>
                   )}
                   <div className="contencioso-copilot-input-row">
-                    <button
-                      className="contencioso-copilot-prompt-btn"
-                      onClick={() => setShowPromptsManager(true)}
-                      title="Selecionar prompt"
-                    >
-                      📝
-                    </button>
+                    <div className="contencioso-copilot-prompt-wrapper">
+                      <button
+                        className="contencioso-copilot-prompt-btn"
+                        onClick={() => setShowPromptsDropdown(!showPromptsDropdown)}
+                        title="Selecionar prompt"
+                      >
+                        📝
+                      </button>
+                      {showPromptsDropdown && (
+                        <div className="contencioso-copilot-prompt-dropdown">
+                          <div className="contencioso-copilot-prompt-dropdown-header">
+                            <span>Selecionar prompt</span>
+                            <button
+                              className="contencioso-copilot-prompt-dropdown-edit"
+                              onClick={() => {
+                                setShowPromptsDropdown(false);
+                                setShowPromptsManager(true);
+                              }}
+                              title="Gerenciar prompts"
+                            >
+                              ⚙️
+                            </button>
+                          </div>
+                          {availablePrompts.length === 0 ? (
+                            <div className="contencioso-copilot-prompt-dropdown-empty">
+                              Nenhum prompt cadastrado
+                            </div>
+                          ) : (
+                            <ul className="contencioso-copilot-prompt-dropdown-list">
+                              {availablePrompts.map((prompt) => (
+                                <li
+                                  key={prompt.id}
+                                  className={`contencioso-copilot-prompt-dropdown-item${selectedPrompt?.id === prompt.id ? ' selected' : ''}`}
+                                  onClick={() => {
+                                    setSelectedPrompt(prompt);
+                                    setCopilotInput(prompt.content);
+                                    setShowPromptsDropdown(false);
+                                  }}
+                                >
+                                  <strong>{prompt.name}</strong>
+                                  {prompt.description && <span>{prompt.description}</span>}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      )}
+                    </div>
                     <textarea
                       value={copilotInput}
                       onChange={(e) => setCopilotInput(e.target.value)}

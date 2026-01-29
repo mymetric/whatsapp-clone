@@ -3,9 +3,10 @@
  */
 
 const DB_NAME = 'WhatsAppCloneDB';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const BOARD_STORE = 'boardItems';
 const PREFERENCES_STORE = 'preferences';
+const WHATSAPP_PHONES_STORE = 'whatsappPhones';
 
 interface BoardData {
   boardId: string;
@@ -18,6 +19,12 @@ interface ColumnPreferences {
   boardId: string;
   visibleColumns: string[];
   columnOrder: string[];
+}
+
+interface WhatsAppPhonesData {
+  id: string; // sempre 'phones'
+  phones: any[];
+  lastUpdate: string;
 }
 
 class IndexedDBService {
@@ -54,6 +61,12 @@ class IndexedDBService {
         if (!db.objectStoreNames.contains(PREFERENCES_STORE)) {
           db.createObjectStore(PREFERENCES_STORE, { keyPath: 'boardId' });
           console.log('✅ IndexedDB: Object store criado:', PREFERENCES_STORE);
+        }
+
+        // Criar object store para telefones do WhatsApp
+        if (!db.objectStoreNames.contains(WHATSAPP_PHONES_STORE)) {
+          db.createObjectStore(WHATSAPP_PHONES_STORE, { keyPath: 'id' });
+          console.log('✅ IndexedDB: Object store criado:', WHATSAPP_PHONES_STORE);
         }
       };
     });
@@ -204,6 +217,64 @@ class IndexedDBService {
 
       request.onerror = () => {
         console.error('❌ IndexedDB: Erro ao limpar dados do board:', request.error);
+        reject(request.error);
+      };
+    });
+  }
+
+  /**
+   * Salva telefones do WhatsApp no IndexedDB
+   */
+  async saveWhatsAppPhones(phones: any[]): Promise<void> {
+    const db = await this.ensureDB();
+
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction([WHATSAPP_PHONES_STORE], 'readwrite');
+      const store = transaction.objectStore(WHATSAPP_PHONES_STORE);
+
+      const data: WhatsAppPhonesData = {
+        id: 'phones',
+        phones,
+        lastUpdate: new Date().toISOString(),
+      };
+
+      const request = store.put(data);
+
+      request.onsuccess = () => {
+        console.log('✅ IndexedDB: Telefones do WhatsApp salvos:', phones.length);
+        resolve();
+      };
+
+      request.onerror = () => {
+        console.error('❌ IndexedDB: Erro ao salvar telefones do WhatsApp:', request.error);
+        reject(request.error);
+      };
+    });
+  }
+
+  /**
+   * Carrega telefones do WhatsApp do IndexedDB
+   */
+  async loadWhatsAppPhones(): Promise<WhatsAppPhonesData | null> {
+    const db = await this.ensureDB();
+
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction([WHATSAPP_PHONES_STORE], 'readonly');
+      const store = transaction.objectStore(WHATSAPP_PHONES_STORE);
+      const request = store.get('phones');
+
+      request.onsuccess = () => {
+        if (request.result) {
+          console.log('✅ IndexedDB: Telefones do WhatsApp carregados:', request.result.phones?.length);
+          resolve(request.result as WhatsAppPhonesData);
+        } else {
+          console.log('ℹ️ IndexedDB: Nenhum telefone do WhatsApp encontrado no cache');
+          resolve(null);
+        }
+      };
+
+      request.onerror = () => {
+        console.error('❌ IndexedDB: Erro ao carregar telefones do WhatsApp:', request.error);
         reject(request.error);
       };
     });

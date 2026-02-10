@@ -2,6 +2,30 @@ import axios from 'axios';
 import { Phone, Message, DocumentRecord, DocumentImage } from '../types';
 // Importar serviço do Firestore REST API
 import { firestoreRestPromptService } from './firestoreRestService';
+import { authService } from './auth';
+
+// Interceptor para injetar token de autenticação em todas as requisições axios
+axios.interceptors.request.use(config => {
+  const token = authService.getToken();
+  if (token) {
+    config.headers = config.headers || {};
+    config.headers['Authorization'] = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// Interceptor para tratar 401 (sessão expirada)
+axios.interceptors.response.use(
+  response => response,
+  async error => {
+    if (error.response?.status === 401) {
+      console.warn('⚠️ Sessão expirada (axios), fazendo logout...');
+      await authService.logout();
+      window.location.reload();
+    }
+    return Promise.reject(error);
+  }
+);
 
 interface ApiConfig {
   baseUrl: string;
@@ -60,14 +84,23 @@ interface AISuggestion {
   last_message: string;
 }
 
-// Prompts da IA
+// Prompts da IA (estrutura hierárquica em árvore)
 export interface Prompt {
   id: string;
   name: string;
   description?: string;
   content: string;
+  parentId?: string | null;  // ID do prompt pai (null = raiz)
+  order?: number;            // Ordem de exibição entre irmãos
   createdAt?: string;
   updatedAt?: string;
+}
+
+// Interface auxiliar para árvore de prompts
+export interface PromptTreeNode extends Prompt {
+  children: PromptTreeNode[];
+  level: number;
+  expanded?: boolean;
 }
 
 export const phoneService = {

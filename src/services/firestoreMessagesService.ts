@@ -1,3 +1,5 @@
+import { authService } from './auth';
+
 // Serviço para buscar mensagens do Firestore via backend
 
 export interface FirestoreMessage {
@@ -28,7 +30,11 @@ export const firestoreMessagesService = {
     // Normalizar telefone
     const normalizedPhone = phone.replace(/\D/g, '');
 
-    const response = await fetch(`/api/firestore/messages?phone=${normalizedPhone}&limit=${limit}`);
+    const token = authService.getToken();
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const response = await fetch(`/api/firestore/messages?phone=${normalizedPhone}&limit=${limit}`, { headers });
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({ error: 'Erro desconhecido' }));

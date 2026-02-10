@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const express = require('express');
 const axios = require('axios');
 const FormData = require('form-data');
@@ -170,6 +171,297 @@ const PORT = process.env.PORT || 4000;
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
+// =====================================================
+// AUTH — Middleware de autenticação e permissões
+// =====================================================
+
+const SESSION_TTL = 24 * 60 * 60 * 1000; // 24 horas
+
+const ALL_PERMISSIONS = ['conversas-leads', 'file-processing', 'whatsapp', 'contencioso', 'prompts', 'admin'];
+
+const DEFAULT_PERMISSIONS = {
+  admin: ALL_PERMISSIONS,
+  user: ['conversas-leads'],
+};
+
+async function requireAuth(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Token de autenticação não fornecido' });
+  }
+
+  const token = authHeader.substring(7);
+
+  if (!firestoreDb) {
+    return res.status(500).json({ error: 'Firebase não configurado' });
+  }
+
+  try {
+    const sessionDoc = await firestoreDb.collection('sessions').doc(token).get();
+    if (!sessionDoc.exists) {
+      return res.status(401).json({ error: 'Sessão inválida' });
+    }
+
+    const session = sessionDoc.data();
+
+    if (session.expiresAt && new Date(session.expiresAt) < new Date()) {
+      await firestoreDb.collection('sessions').doc(token).delete();
+      return res.status(401).json({ error: 'Sessão expirada' });
+    }
+
+    req.user = {
+      email: session.email,
+      name: session.name,
+      role: session.role,
+      permissions: session.permissions || DEFAULT_PERMISSIONS[session.role] || [],
+    };
+
+    next();
+  } catch (err) {
+    console.error('❌ Erro na autenticação:', err.message);
+    return res.status(500).json({ error: 'Erro na autenticação' });
+  }
+}
+
+function requirePermission(tabId) {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Não autenticado' });
+    }
+    if (req.user.role === 'admin') {
+      return next();
+    }
+    if (!req.user.permissions.includes(tabId)) {
+      return res.status(403).json({ error: 'Sem permissão para acessar este recurso' });
+    }
+    next();
+  };
+}
+
+function requireAdmin(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Não autenticado' });
+  }
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Acesso restrito a administradores' });
+  }
+  next();
+}
+
+// =====================================================
+// AUTH — Endpoints de login/logout
+// =====================================================
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    if (!firestoreDb) {
+      return res.status(500).json({ error: 'Firebase não configurado' });
+    }
+
+    const { email, password } = req.body || {};
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email e senha são obrigatórios' });
+    }
+
+    const userDoc = await firestoreDb.collection('users').doc(email).get();
+    if (!userDoc.exists) {
+      return res.status(401).json({ error: 'Credenciais inválidas' });
+    }
+
+    const userData = userDoc.data();
+    if (userData.password !== password) {
+      return res.status(401).json({ error: 'Credenciais inválidas' });
+    }
+
+    const token = crypto.randomBytes(32).toString('hex');
+    const permissions = userData.permissions || DEFAULT_PERMISSIONS[userData.role] || [];
+
+    await firestoreDb.collection('sessions').doc(token).set({
+      email: userData.email,
+      name: userData.name,
+      role: userData.role,
+      permissions,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + SESSION_TTL).toISOString(),
+    });
+
+    console.log(`✅ [auth] Login: ${email}`);
+
+    return res.json({
+      token,
+      user: {
+        email: userData.email,
+        name: userData.name,
+        role: userData.role,
+        permissions,
+      },
+    });
+  } catch (err) {
+    console.error('❌ [auth] Erro no login:', err.message);
+    return res.status(500).json({ error: 'Erro no login', details: err.message });
+  }
+});
+
+app.post('/api/auth/logout', requireAuth, async (req, res) => {
+  try {
+    const token = req.headers.authorization.substring(7);
+    await firestoreDb.collection('sessions').doc(token).delete();
+    console.log(`✅ [auth] Logout: ${req.user.email}`);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('❌ [auth] Erro no logout:', err.message);
+    return res.status(500).json({ error: 'Erro no logout' });
+  }
+});
+
+// =====================================================
+// USERS — Gestão de usuários (admin only)
+// =====================================================
+
+app.get('/api/users', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const snapshot = await firestoreDb.collection('users').get();
+    const users = snapshot.docs.map(doc => {
+      const data = doc.data();
+      return {
+        email: data.email,
+        name: data.name,
+        role: data.role,
+        permissions: data.permissions || DEFAULT_PERMISSIONS[data.role] || [],
+      };
+    });
+    return res.json(users);
+  } catch (err) {
+    console.error('❌ [users] Erro ao listar usuários:', err.message);
+    return res.status(500).json({ error: 'Erro ao listar usuários' });
+  }
+});
+
+app.post('/api/users', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { email, name, password, role } = req.body || {};
+    if (!email || !name || !password) {
+      return res.status(400).json({ error: 'email, name e password são obrigatórios' });
+    }
+
+    const existing = await firestoreDb.collection('users').doc(email).get();
+    if (existing.exists) {
+      return res.status(409).json({ error: 'Usuário já existe' });
+    }
+
+    const userRole = role === 'admin' ? 'admin' : 'user';
+    const permissions = DEFAULT_PERMISSIONS[userRole];
+
+    await firestoreDb.collection('users').doc(email).set({
+      email,
+      name,
+      password,
+      role: userRole,
+      permissions,
+    });
+
+    console.log(`✅ [users] Usuário criado: ${email}`);
+    return res.json({ email, name, role: userRole, permissions });
+  } catch (err) {
+    console.error('❌ [users] Erro ao criar usuário:', err.message);
+    return res.status(500).json({ error: 'Erro ao criar usuário' });
+  }
+});
+
+app.put('/api/users/:email', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { email } = req.params;
+    const userDoc = await firestoreDb.collection('users').doc(email).get();
+    if (!userDoc.exists) {
+      return res.status(404).json({ error: 'Usuário não encontrado' });
+    }
+
+    const updates = {};
+    const { name, role, password } = req.body || {};
+    if (name) updates.name = name;
+    if (role && (role === 'admin' || role === 'user')) updates.role = role;
+    if (password) updates.password = password;
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: 'Nenhum campo para atualizar' });
+    }
+
+    await firestoreDb.collection('users').doc(email).update(updates);
+
+    const updated = (await firestoreDb.collection('users').doc(email).get()).data();
+    console.log(`✅ [users] Usuário atualizado: ${email}`);
+    return res.json({
+      email: updated.email,
+      name: updated.name,
+      role: updated.role,
+      permissions: updated.permissions || DEFAULT_PERMISSIONS[updated.role] || [],
+    });
+  } catch (err) {
+    console.error('❌ [users] Erro ao atualizar usuário:', err.message);
+    return res.status(500).json({ error: 'Erro ao atualizar usuário' });
+  }
+});
+
+app.put('/api/users/:email/permissions', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { email } = req.params;
+    const { permissions } = req.body || {};
+
+    if (!Array.isArray(permissions)) {
+      return res.status(400).json({ error: 'permissions deve ser um array' });
+    }
+
+    const valid = permissions.filter(p => ALL_PERMISSIONS.includes(p));
+
+    const userDoc = await firestoreDb.collection('users').doc(email).get();
+    if (!userDoc.exists) {
+      return res.status(404).json({ error: 'Usuário não encontrado' });
+    }
+
+    await firestoreDb.collection('users').doc(email).update({ permissions: valid });
+
+    // Invalidar sessões ativas deste usuário
+    const sessions = await firestoreDb.collection('sessions').where('email', '==', email).get();
+    const batch = firestoreDb.batch();
+    sessions.docs.forEach(doc => batch.delete(doc.ref));
+    await batch.commit();
+
+    console.log(`✅ [users] Permissões atualizadas para ${email}: ${valid.join(', ')} (${sessions.size} sessão(ões) invalidada(s))`);
+    return res.json({ email, permissions: valid, sessionsInvalidated: sessions.size });
+  } catch (err) {
+    console.error('❌ [users] Erro ao atualizar permissões:', err.message);
+    return res.status(500).json({ error: 'Erro ao atualizar permissões' });
+  }
+});
+
+app.delete('/api/users/:email', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { email } = req.params;
+
+    if (email === req.user.email) {
+      return res.status(400).json({ error: 'Não é possível deletar seu próprio usuário' });
+    }
+
+    const userDoc = await firestoreDb.collection('users').doc(email).get();
+    if (!userDoc.exists) {
+      return res.status(404).json({ error: 'Usuário não encontrado' });
+    }
+
+    // Deletar sessões ativas
+    const sessions = await firestoreDb.collection('sessions').where('email', '==', email).get();
+    const batch = firestoreDb.batch();
+    sessions.docs.forEach(doc => batch.delete(doc.ref));
+    batch.delete(firestoreDb.collection('users').doc(email));
+    await batch.commit();
+
+    console.log(`✅ [users] Usuário deletado: ${email}`);
+    return res.json({ success: true, email });
+  } catch (err) {
+    console.error('❌ [users] Erro ao deletar usuário:', err.message);
+    return res.status(500).json({ error: 'Erro ao deletar usuário' });
+  }
+});
+
 // Proxy simples para baixar anexos (evita CORS no browser).
 // IMPORTANTE: restringe hosts para reduzir risco de SSRF.
 const ALLOWED_PROXY_HOSTS = new Set([
@@ -179,7 +471,7 @@ const ALLOWED_PROXY_HOSTS = new Set([
   'docs.google.com',
 ]);
 
-app.get('/api/proxy-file', async (req, res) => {
+app.get('/api/proxy-file', requireAuth, async (req, res) => {
   try {
     const rawUrl = String(req.query.url || '');
     if (!rawUrl) {
@@ -231,7 +523,7 @@ app.get('/api/health', (req, res) => {
  *   - phone: telefone do chat (obrigatório)
  *   - limit: número máximo de mensagens (opcional, default 50)
  */
-app.get('/api/firestore/messages', async (req, res) => {
+app.get('/api/firestore/messages', requireAuth, requirePermission('conversas-leads'), async (req, res) => {
   try {
     if (!firestoreDb) {
       return res.status(500).json({ error: 'Firebase não configurado no servidor' });
@@ -273,7 +565,7 @@ app.options('/api/send-message', (req, res) => {
   return res.status(200).end();
 });
 
-app.post('/api/send-message', async (req, res) => {
+app.post('/api/send-message', requireAuth, requirePermission('conversas-leads'), async (req, res) => {
   try {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -359,7 +651,7 @@ function loadGrokApiKey() {
 /**
  * DEBUG: Endpoint para buscar apenas as colunas de um board
  */
-app.get('/api/contencioso/columns', async (req, res) => {
+app.get('/api/contencioso/columns', requireAuth, requirePermission('contencioso'), async (req, res) => {
   const boardId = Number(req.query.boardId) || 607533664;
   const apiKey = loadMondayApiKey();
 
@@ -420,7 +712,7 @@ app.get('/api/contencioso/columns', async (req, res) => {
   }
 });
 
-app.get('/api/contencioso', async (req, res) => {
+app.get('/api/contencioso', requireAuth, requirePermission('contencioso'), async (req, res) => {
   const boardId = Number(req.query.boardId) || 632454515;
   const maxItems = Number(req.query.maxItems) || 0; // 0 = todos os itens
   const orderByRecent = req.query.orderByRecent === 'true'; // Ordenar por data de criação
@@ -635,7 +927,7 @@ app.get('/api/contencioso', async (req, res) => {
  * Busca as updates de um item específico de contencioso no Monday.
  * Usado tanto pela ficha do contencioso (frontend) quanto pelo contexto do Grok.
  */
-app.get('/api/contencioso/updates', async (req, res) => {
+app.get('/api/contencioso/updates', requireAuth, requirePermission('contencioso'), async (req, res) => {
   const apiKey = loadMondayApiKey();
   const rawItemId = req.query.itemId;
 
@@ -724,7 +1016,7 @@ app.get('/api/contencioso/updates', async (req, res) => {
  * Busca itens e updates do Monday por número de telefone
  * GET /api/monday/updates-by-phone?phone=+5511999999999&boardId=632454515
  */
-app.get('/api/monday/updates-by-phone', async (req, res) => {
+app.get('/api/monday/updates-by-phone', requireAuth, requirePermission('conversas-leads'), async (req, res) => {
   const apiKey = loadMondayApiKey();
   const phone = req.query.phone;
   const boardId = req.query.boardId || '607533664'; // Board padrão de leads
@@ -1046,7 +1338,7 @@ async function extractTextFromFile(file) {
 }
 
 // Endpoint para conversas genéricas com o Grok
-app.post('/api/grok/chat', async (req, res) => {
+app.post('/api/grok/chat', requireAuth, requirePermission('conversas-leads'), async (req, res) => {
   const apiKey = loadGrokApiKey();
   if (!apiKey) {
     return res.status(500).json({ error: 'Grok API key não configurada no .env (GROK_API_KEY)' });
@@ -1095,7 +1387,7 @@ app.post('/api/grok/chat', async (req, res) => {
 });
 
 // Endpoint para conversar com o Grok usando contexto de contencioso
-app.post('/api/grok/contencioso', async (req, res) => {
+app.post('/api/grok/contencioso', requireAuth, requirePermission('contencioso'), async (req, res) => {
   const apiKey = loadGrokApiKey();
   if (!apiKey) {
     return res.status(500).json({ error: 'Grok API key não configurada no .env (GROK_API_KEY)' });
@@ -1351,7 +1643,7 @@ de forma clara, objetiva e com foco prático para advogados.`;
 /**
  * Cria um update (comentário) em um item do Monday
  */
-app.post('/api/monday/update', async (req, res) => {
+app.post('/api/monday/update', requireAuth, requirePermission('conversas-leads'), async (req, res) => {
   const apiKey = loadMondayApiKey();
   const { itemId, body } = req.body || {};
 
@@ -1424,7 +1716,7 @@ app.post('/api/monday/update', async (req, res) => {
  * Busca todos os telefones únicos da collection messages do Firestore
  * Retorna: { phone, messageCount, lastMessage: { content, timestamp, source } }
  */
-app.get('/api/firestore/unique-phones', async (req, res) => {
+app.get('/api/firestore/unique-phones', requireAuth, requirePermission('conversas-leads'), async (req, res) => {
   try {
     if (!firestoreDb) {
       return res.status(500).json({ error: 'Firebase não configurado no servidor' });
@@ -1499,7 +1791,7 @@ app.get('/api/firestore/unique-phones', async (req, res) => {
 /**
  * Cria um item (lead) em um board do Monday
  */
-app.post('/api/monday/create-item', async (req, res) => {
+app.post('/api/monday/create-item', requireAuth, requirePermission('conversas-leads'), async (req, res) => {
   const apiKey = loadMondayApiKey();
   const { boardId, itemName, columnValues } = req.body || {};
 
@@ -1589,6 +1881,1023 @@ app.post('/api/monday/create-item', async (req, res) => {
       error: 'Erro ao criar item no Monday',
       details: err.response?.data || err.message,
     });
+  }
+});
+
+/**
+ * Webhook endpoint para receber notificações do Umbler
+ * POST /api/umbler/webhook
+ * Salva as notificações na collection 'umbler_webhooks' do Firestore
+ */
+app.post('/api/umbler/webhook', async (req, res) => {
+  try {
+    const webhookData = req.body;
+
+    console.log('📥 [Umbler Webhook] Recebido:', JSON.stringify(webhookData, null, 2).substring(0, 500));
+
+    if (!webhookData || Object.keys(webhookData).length === 0) {
+      console.warn('⚠️ [Umbler Webhook] Payload vazio recebido');
+      return res.status(400).json({ error: 'Payload vazio' });
+    }
+
+    if (!firestoreDb) {
+      console.error('❌ [Umbler Webhook] Firebase não configurado');
+      return res.status(500).json({ error: 'Firebase não configurado no servidor' });
+    }
+
+    // Preparar documento para salvar
+    const docData = {
+      ...webhookData,
+      _receivedAt: admin.firestore.FieldValue.serverTimestamp(),
+      _receivedAtISO: new Date().toISOString(),
+    };
+
+    // Usar EventId como ID do documento se disponível, senão gerar automaticamente
+    const eventId = webhookData.EventId || webhookData.Id || null;
+
+    let docRef;
+    if (eventId) {
+      docRef = firestoreDb.collection('umbler_webhooks').doc(eventId);
+      await docRef.set(docData, { merge: true });
+      console.log(`✅ [Umbler Webhook] Salvo com ID: ${eventId}`);
+    } else {
+      docRef = await firestoreDb.collection('umbler_webhooks').add(docData);
+      console.log(`✅ [Umbler Webhook] Salvo com ID gerado: ${docRef.id}`);
+    }
+
+    return res.status(200).json({
+      success: true,
+      id: eventId || docRef.id,
+      message: 'Webhook recebido e salvo com sucesso'
+    });
+  } catch (err) {
+    console.error('❌ [Umbler Webhook] Erro ao processar webhook:', err.message);
+    return res.status(500).json({
+      error: 'Erro ao processar webhook',
+      details: err.message,
+    });
+  }
+});
+
+/**
+ * GET /api/umbler/webhooks - Lista webhooks recebidos do Umbler
+ * Query params:
+ *   - limit: número máximo de webhooks (default 50)
+ *   - startAfter: ID do documento para paginação
+ */
+app.get('/api/umbler/webhooks', requireAuth, async (req, res) => {
+  try {
+    if (!firestoreDb) {
+      return res.status(500).json({ error: 'Firebase não configurado no servidor' });
+    }
+
+    const limitParam = parseInt(req.query.limit) || 50;
+
+    console.log(`📋 [Umbler Webhooks] Buscando últimos ${limitParam} webhooks...`);
+
+    let query = firestoreDb
+      .collection('umbler_webhooks')
+      .orderBy('_receivedAt', 'desc')
+      .limit(limitParam);
+
+    const snapshot = await query.get();
+
+    const webhooks = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      _receivedAt: doc.data()._receivedAt?.toDate?.() || doc.data()._receivedAt,
+    }));
+
+    console.log(`✅ [Umbler Webhooks] Retornando ${webhooks.length} webhooks`);
+
+    return res.json({ webhooks, count: webhooks.length });
+  } catch (err) {
+    console.error('❌ [Umbler Webhooks] Erro ao buscar webhooks:', err.message);
+    return res.status(500).json({
+      error: 'Erro ao buscar webhooks',
+      details: err.message,
+    });
+  }
+});
+
+// =====================================================
+// FILE PROCESSING — Processamento de Arquivos (Mídias)
+// =====================================================
+
+// Helper: classificar mediaType a partir do MIME type
+function classifyMediaType(mimeType) {
+  if (!mimeType) return 'image';
+  const m = mimeType.toLowerCase();
+  if (m.startsWith('image/')) return 'image';
+  if (m.startsWith('audio/')) return 'audio';
+  if (m === 'application/pdf') return 'pdf';
+  if (m === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') return 'docx';
+  if (m === 'application/msword') return 'docx';
+  if (m.startsWith('video/')) return 'image'; // treat video as image fallback
+  return 'image';
+}
+
+// Helper: Resolver URL de arquivo de email
+// O campo `file` nos anexos de email pode ser um Google Drive file ID ou uma URL completa
+function resolveEmailFileUrl(fileValue) {
+  if (!fileValue) return '';
+  // Se já é uma URL completa, retorna direto
+  if (fileValue.startsWith('http://') || fileValue.startsWith('https://')) return fileValue;
+  // Se parece com um Google Drive file ID, construir a URL de download direto
+  return `https://drive.google.com/uc?export=download&id=${fileValue}`;
+}
+
+// Helper: OCR com Google Vision via FaaS (DigitalOcean serverless)
+// Recebe a URL da imagem diretamente — sem necessidade de baixar/base64
+const VISION_FAAS_URL = 'https://faas-nyc1-2ef2e6cc.doserverless.co/api/v1/namespaces/fn-40f71f3b-ef29-4735-b9b7-94774d6c5fa7/actions/google_vision';
+const VISION_FAAS_AUTH = 'Basic NTUxZDA1YmMtN2YzMy00MzgyLWFjZjktOWMxZDk5ZGE4MGFkOjM5VFl5N1lHNHNHSW1Rek42QXZLQkVnMkRkQTVjMjBKRlY4c1h2RndUSGpIVUJUdmlUMG5MalJ1SjRuSUNBZ0Y=';
+
+async function ocrWithGoogleVision(mediaUrl) {
+  console.log(`🔍 [Vision FaaS] Enviando URL para OCR: ${mediaUrl}`);
+  const response = await axios.post(
+    `${VISION_FAAS_URL}?blocking=true&result=true`,
+    { url: mediaUrl },
+    {
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: VISION_FAAS_AUTH,
+      },
+      timeout: 60000,
+    }
+  );
+
+  // Resposta: response.data.body é JSON string com formato da Vision API
+  const rawBody = response.data?.body || response.data;
+  const parsed = typeof rawBody === 'string' ? JSON.parse(rawBody) : rawBody;
+
+  const annotations = parsed?.responses?.[0]?.textAnnotations;
+  if (!annotations || annotations.length === 0) {
+    console.log('🔍 [Vision FaaS] Nenhum texto detectado na imagem');
+    return '';
+  }
+  const text = annotations[0].description || '';
+  console.log(`✅ [Vision FaaS] Texto extraído: ${text.length} caracteres`);
+  return text;
+}
+
+// Helper: Transcrever áudio com AssemblyAI
+async function transcribeWithAssemblyAI(audioBuffer) {
+  const apiKey = process.env.ASSEMBLYAI_API_KEY;
+  if (!apiKey) throw new Error('ASSEMBLYAI_API_KEY não configurada');
+
+  const headers = { authorization: apiKey };
+
+  // 1. Upload
+  const uploadRes = await axios.post('https://api.assemblyai.com/v2/upload', audioBuffer, {
+    headers: { ...headers, 'Content-Type': 'application/octet-stream' },
+    maxBodyLength: Infinity,
+  });
+  const uploadUrl = uploadRes.data.upload_url;
+
+  // 2. Create transcript
+  const transcriptRes = await axios.post(
+    'https://api.assemblyai.com/v2/transcript',
+    { audio_url: uploadUrl, language_code: 'pt' },
+    { headers }
+  );
+  const transcriptId = transcriptRes.data.id;
+
+  // 3. Poll until done (max ~5 min)
+  const maxPolls = 60;
+  for (let i = 0; i < maxPolls; i++) {
+    await new Promise(r => setTimeout(r, 5000));
+    const pollRes = await axios.get(
+      `https://api.assemblyai.com/v2/transcript/${transcriptId}`,
+      { headers }
+    );
+    if (pollRes.data.status === 'completed') {
+      return pollRes.data.text || '';
+    }
+    if (pollRes.data.status === 'error') {
+      throw new Error(`AssemblyAI error: ${pollRes.data.error}`);
+    }
+  }
+  throw new Error('AssemblyAI: timeout aguardando transcrição');
+}
+
+// Helper: Extrair texto de PDF (pdf-parse + fallback Vision OCR via URL)
+// PDFs que são prints/scans retornam pouco texto via pdf-parse — threshold de 50 chars
+// Se pdf-parse retorna pouco, tenta OCR e usa o resultado mais longo
+async function extractTextFromPDF(pdfBuffer, mediaUrl) {
+  let pdfText = '';
+  try {
+    const parser = new PDFParse({ data: pdfBuffer });
+    const result = await parser.getText();
+    await parser.destroy();
+    pdfText = (result.text || '').trim();
+  } catch (err) {
+    console.warn('⚠️ pdf-parse falhou:', err.message);
+  }
+
+  // Se pdf-parse extraiu bastante texto, usa direto
+  if (pdfText.length > 50) {
+    return { text: pdfText, method: 'pdf-parse' };
+  }
+
+  // Pouco ou nenhum texto — provavelmente é um scan/print, tenta Vision OCR
+  console.log(`🔍 [FileProcessing] PDF com pouco texto (${pdfText.length} chars), tentando Vision OCR...`);
+  const ocrText = await ocrWithGoogleVision(mediaUrl);
+
+  // Usa o resultado mais longo entre pdf-parse e OCR
+  if (ocrText.trim().length > pdfText.length) {
+    return { text: ocrText, method: 'google-vision-pdf' };
+  }
+  return { text: pdfText || ocrText, method: pdfText ? 'pdf-parse' : 'google-vision-pdf' };
+}
+
+// Helper: Extrair texto de DOCX (mammoth para .docx, word-extractor para .doc)
+async function extractTextFromDocx(buffer, mimeType) {
+  // .docx (OpenXML)
+  if (!mimeType || mimeType.includes('openxmlformats') || mimeType.includes('docx')) {
+    const result = await mammoth.extractRawText({ buffer });
+    return { text: result.value || '', method: 'mammoth' };
+  }
+  // .doc (legacy binary format)
+  const extractor = new WordExtractor();
+  const doc = await extractor.extract(buffer);
+  return { text: doc.getBody() || '', method: 'word-extractor' };
+}
+
+// Helper: Upload para GCS usando Firebase Admin SDK
+async function uploadToGCS(buffer, gcsPath, mimeType) {
+  const bucketName = process.env.GCS_BUCKET_NAME;
+  if (!bucketName) throw new Error('GCS_BUCKET_NAME não configurada');
+
+  const bucket = admin.storage().bucket(bucketName);
+  const file = bucket.file(gcsPath);
+
+  await file.save(buffer, {
+    metadata: { contentType: mimeType },
+  });
+
+  // Make publicly readable
+  await file.makePublic();
+  return `https://storage.googleapis.com/${bucketName}/${gcsPath}`;
+}
+
+// Helper: Processar um item da fila
+async function processQueueItem(itemId) {
+  if (!firestoreDb) throw new Error('Firebase não configurado');
+
+  const queueRef = firestoreDb.collection('file_processing_queue').doc(itemId);
+  const itemDoc = await queueRef.get();
+
+  if (!itemDoc.exists) throw new Error(`Item ${itemId} não encontrado na fila`);
+
+  const item = itemDoc.data();
+
+  // Atualizar status para processing
+  await queueRef.update({
+    status: 'processing',
+    lastAttemptAt: new Date().toISOString(),
+  });
+
+  try {
+    // Determinar collection de origem (email ou umbler)
+    const webhookSource = item.webhookSource || 'umbler';
+    const sourceCollection = webhookSource === 'email' ? 'email_webhooks' : 'umbler_webhooks';
+
+    // Buscar webhook original para pegar MediaUrl (fallback se não salvo na fila)
+    const webhookDoc = await firestoreDb.collection(sourceCollection).doc(item.webhookId).get();
+    if (!webhookDoc.exists) throw new Error(`Webhook ${item.webhookId} não encontrado em ${sourceCollection}`);
+
+    let mediaUrl = item.mediaUrl;
+    const whData = webhookDoc.data();
+
+    // Se mediaUrl vazio, tentar extrair do webhook original
+    if (!mediaUrl) {
+      if (webhookSource === 'email') {
+        // Para emails, extrair URL do campo images pelo attachmentIndex
+        let images = [];
+        try {
+          images = typeof whData.images === 'string' ? JSON.parse(whData.images) : (whData.images || []);
+        } catch (e) { /* ignore */ }
+
+        const idx = item.attachmentIndex || 0;
+        const img = images[idx] || {};
+        const rawRef = img.file || img.url || img.File || img.Url || '';
+        mediaUrl = resolveEmailFileUrl(rawRef);
+
+        if (mediaUrl) {
+          await queueRef.update({ mediaUrl });
+          console.log(`🔗 [FileProcessing] mediaUrl extraída do email (anexo ${idx}): ${mediaUrl}`);
+        }
+      } else {
+        // Para umbler, extrair de Message.File.Url ou LastMessage.File.Url
+        const payload = whData.Payload || whData.body?.Payload || {};
+        const content = payload.Content || {};
+        const msgNested = content.Message || {};
+        const lmNested = content.LastMessage || {};
+        const msgRoot = whData.Message || {};
+        const lmRoot = whData.LastMessage || {};
+        mediaUrl = (msgNested.File || {}).Url || (lmNested.File || {}).Url
+                || (msgRoot.File || {}).Url || (lmRoot.File || {}).Url || '';
+
+        if (mediaUrl) {
+          await queueRef.update({ mediaUrl });
+          console.log(`🔗 [FileProcessing] mediaUrl atualizada do webhook: ${mediaUrl}`);
+        }
+      }
+    }
+
+    if (!mediaUrl) {
+      // LOG DIAGNÓSTICO: estrutura completa do webhook para identificar onde está a URL
+      console.error(`🔍 [FileProcessing] DIAGNÓSTICO — mediaUrl não encontrada para item ${itemId}`);
+      console.error(`🔍 [FileProcessing] webhookId: ${item.webhookId}`);
+      console.error(`🔍 [FileProcessing] item.mediaUrl: "${item.mediaUrl}"`);
+      console.error(`🔍 [FileProcessing] WEBHOOK COMPLETO:`, JSON.stringify(whData, null, 2));
+      // Listar todas as chaves de primeiro nível do webhook
+      console.error(`🔍 [FileProcessing] Chaves raiz do webhook: [${Object.keys(whData).join(', ')}]`);
+      // Buscar qualquer campo que contenha "url" (case insensitive) em toda a estrutura
+      const findUrls = (obj, path = '') => {
+        const found = [];
+        if (!obj || typeof obj !== 'object') return found;
+        for (const [key, val] of Object.entries(obj)) {
+          const fullPath = path ? `${path}.${key}` : key;
+          if (/url/i.test(key) && typeof val === 'string' && val.length > 0) {
+            found.push({ path: fullPath, value: val });
+          }
+          if (val && typeof val === 'object') {
+            found.push(...findUrls(val, fullPath));
+          }
+        }
+        return found;
+      };
+      const urlFields = findUrls(whData);
+      if (urlFields.length > 0) {
+        console.error(`🔍 [FileProcessing] Campos com "url" encontrados:`, JSON.stringify(urlFields, null, 2));
+      } else {
+        console.error(`🔍 [FileProcessing] NENHUM campo com "url" encontrado em toda a estrutura do webhook`);
+      }
+      throw new Error('mediaUrl não encontrada no item nem no webhook');
+    }
+
+    // Baixar mídia
+    console.log(`📥 [FileProcessing] Baixando mídia: ${mediaUrl}`);
+    const mediaResponse = await axios.get(mediaUrl, {
+      responseType: 'arraybuffer',
+      timeout: 60000,
+    });
+    const mediaBuffer = Buffer.from(mediaResponse.data);
+    console.log(`✅ [FileProcessing] Mídia baixada: ${mediaBuffer.length} bytes`);
+
+    // Classificar e processar
+    let extractedText = '';
+    let processingMethod = '';
+    const mediaType = item.mediaType;
+
+    if (mediaType === 'image') {
+      extractedText = await ocrWithGoogleVision(mediaUrl);
+      processingMethod = 'google-vision-ocr';
+    } else if (mediaType === 'audio') {
+      extractedText = await transcribeWithAssemblyAI(mediaBuffer);
+      processingMethod = 'assemblyai';
+    } else if (mediaType === 'pdf') {
+      const result = await extractTextFromPDF(mediaBuffer, mediaUrl);
+      extractedText = result.text;
+      processingMethod = result.method;
+    } else if (mediaType === 'docx') {
+      const result = await extractTextFromDocx(mediaBuffer, item.mediaMimeType);
+      extractedText = result.text;
+      processingMethod = result.method;
+    }
+
+    // Upload para GCS
+    let gcsUrl = null;
+    let gcsPath = null;
+    try {
+      gcsPath = `file-processing/${mediaType}/${item.webhookId}/${item.mediaFileName}`;
+      gcsUrl = await uploadToGCS(mediaBuffer, gcsPath, item.mediaMimeType);
+      console.log(`☁️ [FileProcessing] Arquivo salvo no GCS: ${gcsUrl}`);
+    } catch (gcsErr) {
+      console.warn('⚠️ [FileProcessing] Erro ao salvar no GCS (não fatal):', gcsErr.message);
+    }
+
+    // Sucesso
+    await queueRef.update({
+      status: 'done',
+      extractedText,
+      processingMethod,
+      gcsUrl,
+      gcsPath,
+      processedAt: new Date().toISOString(),
+      error: null,
+    });
+
+    console.log(`✅ [FileProcessing] Item ${itemId} processado: ${extractedText.length} chars via ${processingMethod}`);
+    return { success: true, extractedText, processingMethod, gcsUrl };
+  } catch (err) {
+    console.error(`❌ [FileProcessing] Erro ao processar item ${itemId}:`, err.message);
+
+    const newAttempts = (item.attempts || 0) + 1;
+    const maxAttempts = item.maxAttempts || 3;
+
+    const updateData = {
+      attempts: newAttempts,
+      error: err.message,
+      lastAttemptAt: new Date().toISOString(),
+    };
+
+    if (newAttempts >= maxAttempts) {
+      updateData.status = 'error';
+      updateData.nextRetryAt = null;
+    } else {
+      // Backoff exponencial: 30s, 2min, 10min
+      const backoffMs = [30000, 120000, 600000][newAttempts - 1] || 600000;
+      updateData.status = 'queued';
+      updateData.nextRetryAt = new Date(Date.now() + backoffMs).toISOString();
+    }
+
+    await queueRef.update(updateData);
+    throw err;
+  }
+}
+
+/**
+ * GET /api/files/media-webhooks — Lista webhooks com mídia
+ * Query: limit, type (image|audio|pdf)
+ */
+app.get('/api/files/media-webhooks', requireAuth, requirePermission('file-processing'), async (req, res) => {
+  try {
+    if (!firestoreDb) {
+      return res.status(500).json({ error: 'Firebase não configurado' });
+    }
+
+    const limitParam = parseInt(req.query.limit) || 100;
+    const typeFilter = req.query.type || null; // image, audio, pdf
+
+    console.log(`📋 [FileProcessing] Buscando webhooks com mídia (limit=${limitParam}, type=${typeFilter})...`);
+
+    const snapshot = await firestoreDb
+      .collection('umbler_webhooks')
+      .orderBy('_receivedAt', 'desc')
+      .limit(500) // Buscar mais para filtrar
+      .get();
+
+    const mediaWebhooks = [];
+
+    for (const doc of snapshot.docs) {
+      const data = doc.data();
+
+      // Suporta ambos formatos: {Payload.Content.Message...} e {Message... / LastMessage...}
+      const payload = data.Payload || {};
+      const content = payload.Content || {};
+      // Formato aninhado (Payload.Content.Message) e raiz (data.Message)
+      const message = content.Message || data.Message || {};
+      const lastMessage = content.LastMessage || data.LastMessage || {};
+
+      // Prioridade: Message (tem URL), fallback LastMessage
+      const msgFile = message.File || {};
+      const lmFile = lastMessage.File || {};
+      const messageType = message.MessageType || lastMessage.MessageType || '';
+
+      // Só interessa mensagens com mídia (Audio, File, Image, Video)
+      if (messageType === 'Text' || !messageType) continue;
+
+      const mediaUrl = msgFile.Url || lmFile.Url || null;
+      const mimeType = msgFile.ContentType || lmFile.ContentType || '';
+      const fileName = msgFile.OriginalName || lmFile.OriginalName || `file_${doc.id}`;
+      const contactPhone = (content.Contact || data.Contact || {}).PhoneNumber || '';
+
+      // Thumbnail como fallback para preview
+      const thumbnailObj = message.Thumbnail || lastMessage.Thumbnail || {};
+      const thumbnailData = thumbnailObj.Data || null;
+      const thumbnailMime = thumbnailObj.ContentType || 'image/jpeg';
+
+      // Classificar tipo
+      let mediaType = classifyMediaType(mimeType);
+      // Também usar MessageType como hint
+      if (messageType === 'Audio') mediaType = 'audio';
+      if (messageType === 'Image') mediaType = 'image';
+
+      // Filtrar por tipo se solicitado
+      if (typeFilter && mediaType !== typeFilter) continue;
+
+      mediaWebhooks.push({
+        id: doc.id,
+        from: contactPhone,
+        mediaUrl,
+        mediaFileName: fileName,
+        mediaMimeType: mimeType,
+        mediaType,
+        receivedAt: data._receivedAtISO || data._receivedAt?.toDate?.()?.toISOString() || null,
+        body: lastMessage.Content || data.Body || '',
+        hasUrl: !!mediaUrl,
+        thumbnailBase64: thumbnailData ? `data:${thumbnailMime};base64,${thumbnailData}` : null,
+        source: 'umbler',
+      });
+
+      if (mediaWebhooks.length >= limitParam) break;
+    }
+
+    // ── Também buscar anexos em email_webhooks ──
+    if (mediaWebhooks.length < limitParam) {
+      const emailSnapshot = await firestoreDb
+        .collection('email_webhooks')
+        .orderBy('_receivedAt', 'desc')
+        .limit(500)
+        .get();
+
+      for (const eDoc of emailSnapshot.docs) {
+        if (mediaWebhooks.length >= limitParam) break;
+
+        const eData = eDoc.data();
+
+        // Parsear campo images (pode ser JSON string ou array)
+        let images = [];
+        try {
+          images = typeof eData.images === 'string' ? JSON.parse(eData.images) : (eData.images || []);
+        } catch (e) {
+          continue;
+        }
+
+        if (!Array.isArray(images) || images.length === 0) continue;
+
+        for (let idx = 0; idx < images.length; idx++) {
+          if (mediaWebhooks.length >= limitParam) break;
+
+          const img = images[idx];
+          const rawFileRef = img.file || img.url || img.File || img.Url || '';
+          if (!rawFileRef) continue;
+
+          const eFileUrl = resolveEmailFileUrl(rawFileRef);
+          const eFileName = img.filename || img.name || img.FileName || img.OriginalName || `email_anexo_${idx}`;
+          let eMimeType = img.contentType || img.type || img.mime || img.ContentType || '';
+
+          // Inferir mediaType pelo mimeType ou extensão do filename
+          let eMediaType;
+          if (eMimeType) {
+            eMediaType = classifyMediaType(eMimeType);
+          } else {
+            const ext = (eFileName.split('.').pop() || '').toLowerCase();
+            if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tiff'].includes(ext)) { eMediaType = 'image'; eMimeType = `image/${ext === 'jpg' ? 'jpeg' : ext}`; }
+            else if (ext === 'pdf') { eMediaType = 'pdf'; eMimeType = 'application/pdf'; }
+            else if (['doc', 'docx'].includes(ext)) { eMediaType = 'docx'; eMimeType = ext === 'docx' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : 'application/msword'; }
+            else if (['mp3', 'wav', 'ogg', 'm4a', 'aac'].includes(ext)) { eMediaType = 'audio'; eMimeType = `audio/${ext}`; }
+            else { eMediaType = 'image'; }
+          }
+
+          if (typeFilter && eMediaType !== typeFilter) continue;
+
+          // Se o anexo já tem extracted_text no email, incluir
+          const preExtractedText = img.extracted_text || '';
+
+          mediaWebhooks.push({
+            id: eDoc.id,
+            attachmentIndex: idx,
+            from: eData.sender || eData.from || '',
+            mediaUrl: eFileUrl,
+            mediaFileName: eFileName,
+            mediaMimeType: eMimeType,
+            mediaType: eMediaType,
+            receivedAt: eData._receivedAtISO || eData._receivedAt?.toDate?.()?.toISOString() || null,
+            body: eData.subject || '',
+            hasUrl: !!eFileUrl,
+            thumbnailBase64: null,
+            source: 'email',
+            preExtractedText,
+          });
+        }
+      }
+    }
+
+    console.log(`✅ [FileProcessing] ${mediaWebhooks.length} webhooks com mídia encontrados (umbler + email)`);
+    return res.json({ webhooks: mediaWebhooks, count: mediaWebhooks.length });
+  } catch (err) {
+    console.error('❌ [FileProcessing] Erro ao buscar media webhooks:', err.message);
+    return res.status(500).json({ error: 'Erro ao buscar webhooks', details: err.message });
+  }
+});
+
+/**
+ * GET /api/files/queue — Lista itens da fila de processamento
+ * Query: status, type, limit
+ */
+app.get('/api/files/queue', requireAuth, requirePermission('file-processing'), async (req, res) => {
+  try {
+    if (!firestoreDb) {
+      return res.status(500).json({ error: 'Firebase não configurado' });
+    }
+
+    const limitParam = parseInt(req.query.limit) || 200;
+    const statusFilter = req.query.status || null;
+    const typeFilter = req.query.type || null;
+
+    let query = firestoreDb
+      .collection('file_processing_queue')
+      .orderBy('createdAt', 'desc')
+      .limit(limitParam);
+
+    const snapshot = await query.get();
+
+    let items = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+    }));
+
+    // Filtrar no cliente (Firestore tem limitações com múltiplos filtros + orderBy)
+    if (statusFilter) {
+      items = items.filter(item => item.status === statusFilter);
+    }
+    if (typeFilter) {
+      items = items.filter(item => item.mediaType === typeFilter);
+    }
+
+    return res.json({ items, count: items.length });
+  } catch (err) {
+    console.error('❌ [FileProcessing] Erro ao buscar fila:', err.message);
+    return res.status(500).json({ error: 'Erro ao buscar fila', details: err.message });
+  }
+});
+
+/**
+ * POST /api/files/enqueue — Adiciona webhooks na fila
+ * Body: { webhookIds: string[], source?: 'umbler' | 'email', attachmentIndex?: number }
+ */
+app.post('/api/files/enqueue', requireAuth, requirePermission('file-processing'), async (req, res) => {
+  try {
+    if (!firestoreDb) {
+      return res.status(500).json({ error: 'Firebase não configurado' });
+    }
+
+    const { webhookIds, source = 'umbler', attachmentIndex } = req.body || {};
+    if (!Array.isArray(webhookIds) || webhookIds.length === 0) {
+      return res.status(400).json({ error: 'webhookIds (array) é obrigatório' });
+    }
+
+    const webhookSource = source === 'email' ? 'email' : 'umbler';
+    const collectionName = webhookSource === 'email' ? 'email_webhooks' : 'umbler_webhooks';
+
+    console.log(`📥 [FileProcessing] Enfileirando ${webhookIds.length} webhook(s) de ${collectionName}...`);
+
+    const results = [];
+
+    for (const webhookId of webhookIds) {
+      // Buscar webhook na collection correta
+      const webhookDoc = await firestoreDb.collection(collectionName).doc(webhookId).get();
+      if (!webhookDoc.exists) {
+        results.push({ webhookId, error: 'Webhook não encontrado' });
+        continue;
+      }
+
+      const data = webhookDoc.data();
+
+      if (webhookSource === 'email') {
+        // ── Fluxo para email_webhooks ──
+        let images = [];
+        try {
+          images = typeof data.images === 'string' ? JSON.parse(data.images) : (data.images || []);
+        } catch (e) {
+          results.push({ webhookId, error: 'Sem anexos válidos no email' });
+          continue;
+        }
+
+        if (!Array.isArray(images) || images.length === 0) {
+          results.push({ webhookId, error: 'Email sem anexos' });
+          continue;
+        }
+
+        // Se attachmentIndex especificado, processar só aquele; senão, todos
+        const indices = (attachmentIndex !== undefined && attachmentIndex !== null)
+          ? [attachmentIndex]
+          : images.map((_, i) => i);
+
+        for (const idx of indices) {
+          const img = images[idx];
+          if (!img) continue;
+
+          const rawFileRef = img.file || img.url || img.File || img.Url || '';
+          if (!rawFileRef) {
+            results.push({ webhookId, attachmentIndex: idx, error: 'Anexo sem URL' });
+            continue;
+          }
+
+          const eFileUrl = resolveEmailFileUrl(rawFileRef);
+          const eFileName = img.filename || img.name || img.FileName || img.OriginalName || `email_anexo_${idx}`;
+          let eMimeType = img.contentType || img.type || img.mime || img.ContentType || '';
+
+          let eMediaType;
+          if (eMimeType) {
+            eMediaType = classifyMediaType(eMimeType);
+          } else {
+            const ext = (eFileName.split('.').pop() || '').toLowerCase();
+            if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tiff'].includes(ext)) { eMediaType = 'image'; eMimeType = `image/${ext === 'jpg' ? 'jpeg' : ext}`; }
+            else if (ext === 'pdf') { eMediaType = 'pdf'; eMimeType = 'application/pdf'; }
+            else if (['doc', 'docx'].includes(ext)) { eMediaType = 'docx'; eMimeType = ext === 'docx' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : 'application/msword'; }
+            else if (['mp3', 'wav', 'ogg', 'm4a', 'aac'].includes(ext)) { eMediaType = 'audio'; eMimeType = `audio/${ext}`; }
+            else { eMediaType = 'image'; }
+          }
+
+          // Se o anexo já tem extracted_text no email, usar como fallback
+          const preExtractedText = img.extracted_text || '';
+
+          const existing = await firestoreDb
+            .collection('file_processing_queue')
+            .where('webhookId', '==', webhookId)
+            .where('attachmentIndex', '==', idx)
+            .limit(1)
+            .get();
+
+          if (!existing.empty) {
+            results.push({ webhookId, attachmentIndex: idx, error: 'Já está na fila', existingId: existing.docs[0].id });
+            continue;
+          }
+
+          // Se já tem texto extraído no email, marcar como done direto
+          const alreadyDone = preExtractedText.length > 10;
+
+          const queueItem = {
+            webhookId,
+            webhookSource: 'email',
+            attachmentIndex: idx,
+            sourcePhone: data.sender || data.from || '',
+            mediaUrl: eFileUrl,
+            mediaFileName: eFileName,
+            mediaMimeType: eMimeType,
+            mediaType: eMediaType,
+            thumbnailBase64: null,
+            receivedAt: data._receivedAtISO || (data._receivedAt?.toDate ? data._receivedAt.toDate().toISOString() : null),
+            status: alreadyDone ? 'done' : 'queued',
+            extractedText: preExtractedText || null,
+            error: null,
+            processingMethod: alreadyDone ? 'email-pre-extracted' : null,
+            attempts: 0,
+            maxAttempts: 3,
+            lastAttemptAt: null,
+            nextRetryAt: null,
+            gcsUrl: null,
+            gcsPath: null,
+            processedAt: alreadyDone ? new Date().toISOString() : null,
+            createdAt: new Date().toISOString(),
+          };
+
+          const docRef = await firestoreDb.collection('file_processing_queue').add(queueItem);
+          results.push({ webhookId, attachmentIndex: idx, queueId: docRef.id, status: 'queued' });
+        }
+      } else {
+        // ── Fluxo original para umbler_webhooks ──
+        const payload = data.Payload || {};
+        const content = payload.Content || {};
+        const message = content.Message || data.Message || {};
+        const lastMessage = content.LastMessage || data.LastMessage || {};
+
+        const msgFile = message.File || {};
+        const lmFile = lastMessage.File || {};
+        const messageType = message.MessageType || lastMessage.MessageType || '';
+
+        const mediaUrl = msgFile.Url || lmFile.Url || '';
+        const mimeType = msgFile.ContentType || lmFile.ContentType || '';
+        const fileName = msgFile.OriginalName || lmFile.OriginalName || `file_${webhookId}`;
+        const contactPhone = (content.Contact || data.Contact || {}).PhoneNumber || '';
+
+        if (!mediaUrl && messageType && messageType !== 'Text') {
+          console.warn(`🔍 [FileProcessing/Enqueue] mediaUrl VAZIA para webhookId=${webhookId} (MessageType=${messageType})`);
+        }
+
+        const thumbnailObj = message.Thumbnail || lastMessage.Thumbnail || {};
+        const thumbnailData = thumbnailObj.Data || null;
+        const thumbnailMime = thumbnailObj.ContentType || 'image/jpeg';
+
+        if (!messageType || messageType === 'Text') {
+          results.push({ webhookId, error: 'Webhook sem mídia' });
+          continue;
+        }
+
+        let mediaType = classifyMediaType(mimeType);
+        if (messageType === 'Audio') mediaType = 'audio';
+        if (messageType === 'Image') mediaType = 'image';
+
+        const existing = await firestoreDb
+          .collection('file_processing_queue')
+          .where('webhookId', '==', webhookId)
+          .limit(1)
+          .get();
+
+        if (!existing.empty) {
+          results.push({ webhookId, error: 'Já está na fila', existingId: existing.docs[0].id });
+          continue;
+        }
+
+        const queueItem = {
+          webhookId,
+          webhookSource: 'umbler',
+          sourcePhone: contactPhone,
+          mediaUrl,
+          mediaFileName: fileName,
+          mediaMimeType: mimeType,
+          mediaType,
+          thumbnailBase64: thumbnailData ? `data:${thumbnailMime};base64,${thumbnailData}` : null,
+          receivedAt: data._receivedAtISO || (data._receivedAt?.toDate ? data._receivedAt.toDate().toISOString() : null),
+          status: 'queued',
+          extractedText: null,
+          error: null,
+          processingMethod: null,
+          attempts: 0,
+          maxAttempts: 3,
+          lastAttemptAt: null,
+          nextRetryAt: null,
+          gcsUrl: null,
+          gcsPath: null,
+          processedAt: null,
+          createdAt: new Date().toISOString(),
+        };
+
+        const docRef = await firestoreDb.collection('file_processing_queue').add(queueItem);
+        results.push({ webhookId, queueId: docRef.id, status: 'queued' });
+      }
+    }
+
+    console.log(`✅ [FileProcessing] Enfileirados: ${results.filter(r => r.queueId).length}/${webhookIds.length}`);
+    return res.json({ results });
+  } catch (err) {
+    console.error('❌ [FileProcessing] Erro ao enfileirar:', err.message);
+    return res.status(500).json({ error: 'Erro ao enfileirar', details: err.message });
+  }
+});
+
+/**
+ * POST /api/files/process-next — Processa o próximo item da fila
+ */
+app.post('/api/files/process-next', requireAuth, requirePermission('file-processing'), async (req, res) => {
+  try {
+    if (!firestoreDb) {
+      return res.status(500).json({ error: 'Firebase não configurado' });
+    }
+
+    // Buscar próximo item: queued sem nextRetryAt, ou com nextRetryAt <= now
+    const now = new Date().toISOString();
+
+    // Buscar itens queued (sem orderBy composto para evitar necessidade de índice)
+    let snapshot = await firestoreDb
+      .collection('file_processing_queue')
+      .where('status', '==', 'queued')
+      .limit(50)
+      .get();
+
+    // Ordenar por createdAt no servidor e filtrar por nextRetryAt
+    const candidates = snapshot.docs
+      .map(doc => ({ id: doc.id, ...doc.data() }))
+      .filter(item => !item.nextRetryAt || item.nextRetryAt <= now)
+      .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+
+    const nextItem = candidates.length > 0 ? candidates[0] : null;
+
+    if (!nextItem) {
+      return res.json({ message: 'Nenhum item na fila para processar', processed: false });
+    }
+
+    console.log(`⚙️ [FileProcessing] Processando próximo item: ${nextItem.id}`);
+    const result = await processQueueItem(nextItem.id);
+    return res.json({ processed: true, itemId: nextItem.id, ...result });
+  } catch (err) {
+    console.error('❌ [FileProcessing] Erro ao processar próximo:', err.message);
+    return res.status(500).json({ error: 'Erro ao processar', details: err.message });
+  }
+});
+
+/**
+ * POST /api/files/process/:id — Processa um item específico da fila
+ */
+app.post('/api/files/process/:id', requireAuth, requirePermission('file-processing'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log(`⚙️ [FileProcessing] Processando item específico: ${id}`);
+    const result = await processQueueItem(id);
+    return res.json({ processed: true, itemId: id, ...result });
+  } catch (err) {
+    console.error(`❌ [FileProcessing] Erro ao processar ${req.params.id}:`, err.message);
+    return res.status(500).json({ error: 'Erro ao processar', details: err.message });
+  }
+});
+
+/**
+ * GET /api/files/webhook-raw/:queueId — Retorna o webhook original completo + mediaUrl interpretada
+ */
+app.get('/api/files/webhook-raw/:queueId', requireAuth, requirePermission('file-processing'), async (req, res) => {
+  try {
+    if (!firestoreDb) {
+      return res.status(500).json({ error: 'Firebase não configurado' });
+    }
+
+    const { queueId } = req.params;
+
+    // Buscar item da fila para saber webhookId e source
+    const queueDoc = await firestoreDb.collection('file_processing_queue').doc(queueId).get();
+    if (!queueDoc.exists) {
+      return res.status(404).json({ error: 'Item não encontrado na fila' });
+    }
+
+    const queueData = queueDoc.data();
+    const webhookSource = queueData.webhookSource || 'umbler';
+    const collectionName = webhookSource === 'email' ? 'email_webhooks' : 'umbler_webhooks';
+
+    // Buscar webhook original
+    const webhookDoc = await firestoreDb.collection(collectionName).doc(queueData.webhookId).get();
+    if (!webhookDoc.exists) {
+      return res.status(404).json({ error: `Webhook ${queueData.webhookId} não encontrado em ${collectionName}` });
+    }
+
+    const webhookData = webhookDoc.data();
+
+    // Converter timestamps do Firestore para ISO strings para serialização
+    const sanitize = (obj) => {
+      if (!obj || typeof obj !== 'object') return obj;
+      if (obj._seconds !== undefined && obj._nanoseconds !== undefined) {
+        return new Date(obj._seconds * 1000).toISOString();
+      }
+      if (typeof obj.toDate === 'function') {
+        return obj.toDate().toISOString();
+      }
+      if (Array.isArray(obj)) return obj.map(sanitize);
+      const result = {};
+      for (const [k, v] of Object.entries(obj)) {
+        result[k] = sanitize(v);
+      }
+      return result;
+    };
+
+    return res.json({
+      queueItem: {
+        id: queueDoc.id,
+        webhookId: queueData.webhookId,
+        webhookSource,
+        attachmentIndex: queueData.attachmentIndex,
+        mediaUrl: queueData.mediaUrl,
+        mediaFileName: queueData.mediaFileName,
+        mediaMimeType: queueData.mediaMimeType,
+        mediaType: queueData.mediaType,
+      },
+      webhook: sanitize(webhookData),
+      collection: collectionName,
+    });
+  } catch (err) {
+    console.error(`❌ [FileProcessing] Erro ao buscar webhook raw:`, err.message);
+    return res.status(500).json({ error: 'Erro ao buscar webhook', details: err.message });
+  }
+});
+
+/**
+ * POST /api/files/retry/:id — Reseta tentativas e recoloca na fila
+ */
+app.post('/api/files/retry/:id', requireAuth, requirePermission('file-processing'), async (req, res) => {
+  try {
+    if (!firestoreDb) {
+      return res.status(500).json({ error: 'Firebase não configurado' });
+    }
+
+    const { id } = req.params;
+    const queueRef = firestoreDb.collection('file_processing_queue').doc(id);
+    const doc = await queueRef.get();
+
+    if (!doc.exists) {
+      return res.status(404).json({ error: 'Item não encontrado' });
+    }
+
+    await queueRef.update({
+      status: 'queued',
+      attempts: 0,
+      error: null,
+      nextRetryAt: null,
+      lastAttemptAt: null,
+    });
+
+    console.log(`🔄 [FileProcessing] Item ${id} resetado para fila`);
+    return res.json({ success: true, itemId: id, status: 'queued' });
+  } catch (err) {
+    console.error(`❌ [FileProcessing] Erro ao retry ${req.params.id}:`, err.message);
+    return res.status(500).json({ error: 'Erro ao retentar', details: err.message });
+  }
+});
+
+/**
+ * DELETE /api/files/queue/:id — Remove um item da fila
+ */
+app.delete('/api/files/queue/:id', requireAuth, requirePermission('file-processing'), async (req, res) => {
+  try {
+    if (!firestoreDb) {
+      return res.status(500).json({ error: 'Firebase não configurado' });
+    }
+
+    const { id } = req.params;
+    const queueRef = firestoreDb.collection('file_processing_queue').doc(id);
+    const doc = await queueRef.get();
+
+    if (!doc.exists) {
+      return res.status(404).json({ error: 'Item não encontrado' });
+    }
+
+    await queueRef.delete();
+
+    console.log(`🗑️ [FileProcessing] Item ${id} removido da fila`);
+    return res.json({ success: true, itemId: id });
+  } catch (err) {
+    console.error(`❌ [FileProcessing] Erro ao remover ${req.params.id}:`, err.message);
+    return res.status(500).json({ error: 'Erro ao remover', details: err.message });
   }
 });
 

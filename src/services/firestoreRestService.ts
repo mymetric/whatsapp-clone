@@ -230,12 +230,14 @@ const firestoreRunQuery = async (structuredQuery: any): Promise<any[]> => {
 const firestoreDocToPrompt = (doc: any): Prompt => {
   const fields = doc.fields || {};
   const docId = doc.name.split('/').pop() || '';
-  
+
   return {
     id: docId,
     name: fields.name?.stringValue || '',
     description: fields.description?.stringValue || '',
     content: fields.content?.stringValue || '',
+    parentId: fields.parentId?.stringValue || null,
+    order: fields.order?.integerValue ? parseInt(fields.order.integerValue) : 0,
     createdAt: fields.createdAt?.stringValue || new Date().toISOString(),
     updatedAt: fields.updatedAt?.stringValue || new Date().toISOString()
   };
@@ -248,6 +250,8 @@ const promptToFirestoreDoc = (prompt: Omit<Prompt, 'id' | 'createdAt' | 'updated
       name: { stringValue: prompt.name },
       description: prompt.description ? { stringValue: prompt.description } : { nullValue: null },
       content: { stringValue: prompt.content },
+      parentId: prompt.parentId ? { stringValue: prompt.parentId } : { nullValue: null },
+      order: { integerValue: prompt.order?.toString() || '0' },
       createdAt: { stringValue: new Date().toISOString() },
       updatedAt: { stringValue: new Date().toISOString() }
     }
@@ -299,7 +303,7 @@ export const firestoreRestPromptService = {
       const projectId = serviceAccount.project_id;
       const token = await getAccessToken(serviceAccount);
       
-      const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/messages/documents/prompts/${id}?updateMask.fieldPaths=name&updateMask.fieldPaths=description&updateMask.fieldPaths=content&updateMask.fieldPaths=updatedAt`;
+      const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/messages/documents/prompts/${id}?updateMask.fieldPaths=name&updateMask.fieldPaths=description&updateMask.fieldPaths=content&updateMask.fieldPaths=parentId&updateMask.fieldPaths=order&updateMask.fieldPaths=updatedAt`;
       
       const response = await fetch(url, {
         method: 'PATCH',
@@ -433,7 +437,7 @@ export const firestoreRestContenciosoPromptService = {
       const projectId = serviceAccount.project_id;
       const token = await getAccessToken(serviceAccount);
       
-      const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/messages/documents/contencioso_prompts/${id}?updateMask.fieldPaths=name&updateMask.fieldPaths=description&updateMask.fieldPaths=content&updateMask.fieldPaths=updatedAt`;
+      const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/messages/documents/contencioso_prompts/${id}?updateMask.fieldPaths=name&updateMask.fieldPaths=description&updateMask.fieldPaths=content&updateMask.fieldPaths=parentId&updateMask.fieldPaths=order&updateMask.fieldPaths=updatedAt`;
       
       const response = await fetch(url, {
         method: 'PATCH',

@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { User, LoginCredentials, AuthContextType } from '../types';
+import { User, LoginCredentials, AuthContextType, TabPermission } from '../types';
 import { authService } from '../services/auth';
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -35,10 +35,16 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
-  const logout = (): void => {
-    authService.logout();
+  const logout = async (): Promise<void> => {
+    await authService.logout();
     setUser(null);
     setIsAuthenticated(false);
+  };
+
+  const hasPermission = (tab: TabPermission): boolean => {
+    if (!user) return false;
+    if (user.role === 'admin') return true;
+    return user.permissions?.includes(tab) ?? false;
   };
 
   const value: AuthContextType = {
@@ -46,6 +52,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     login,
     logout,
     isAuthenticated,
+    hasPermission,
   };
 
   return (

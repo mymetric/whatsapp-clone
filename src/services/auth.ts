@@ -1,115 +1,113 @@
-import { User, LoginCredentials, ApiConfig } from '../types';
-import { firestoreRestUserService } from './firestoreRestService';
+import { User, LoginCredentials, ApiConfig, TabPermission } from '../types';
+
+const SERVER_BASE = process.env.REACT_APP_SERVER_URL || '';
+
+interface AuthSession {
+  token: string;
+  user: User;
+}
 
 class AuthService {
-  private users: User[] = [];
   private apiConfig: ApiConfig | null = null;
-  private usersLoaded: boolean = false;
 
   constructor() {
-    this.loadCredentials();
+    this.loadApiConfig();
   }
 
-  private async loadCredentials() {
-    // Tentar carregar usuários do Firestore
-    try {
-      console.log('📡 Carregando usuários do Firestore...');
-      const firestoreUsers = await firestoreRestUserService.getUsers();
-      if (firestoreUsers && firestoreUsers.length > 0) {
-        this.users = firestoreUsers;
-        this.usersLoaded = true;
-        console.log('✅ Usuários carregados do Firestore:', firestoreUsers.length);
-      } else {
-        console.warn('⚠️ Nenhum usuário encontrado no Firestore');
-        this.users = [];
-        this.usersLoaded = true;
-      }
-    } catch (error) {
-      console.error('❌ Erro ao carregar usuários do Firestore:', error);
-      this.users = [];
-      this.usersLoaded = true;
-    }
-
-    // Carregar apiConfig do .env
+  private loadApiConfig() {
     const sendMessageUrl = process.env.REACT_APP_SEND_MESSAGE_URL;
     const apiBaseUrl = process.env.REACT_APP_API_BASE_URL;
     const apiKey = process.env.REACT_APP_API_KEY;
-    
+
     if (sendMessageUrl) {
-      this.apiConfig = {
-        sendMessageUrl: sendMessageUrl,
-        baseUrl: apiBaseUrl,
-        apiKey: apiKey
-      };
-      console.log('✅ API config carregado do .env');
+      this.apiConfig = { sendMessageUrl, baseUrl: apiBaseUrl, apiKey };
     } else {
-      this.apiConfig = {
-        sendMessageUrl: "https://api.exemplo.com/webhook"
-      };
-      console.warn('⚠️ REACT_APP_SEND_MESSAGE_URL não encontrado, usando URL padrão');
+      this.apiConfig = { sendMessageUrl: 'https://api.exemplo.com/webhook' };
     }
   }
 
   async login(credentials: LoginCredentials): Promise<User | null> {
-    // Tentar buscar usuário específico do Firestore primeiro (mais eficiente)
     try {
-      const firestoreUser = await firestoreRestUserService.getUserByEmail(credentials.email);
-      if (firestoreUser && firestoreUser.password === credentials.password) {
-        const user: User = {
-          email: firestoreUser.email,
-          password: firestoreUser.password,
-          name: firestoreUser.name,
-          role: firestoreUser.role
-        };
-        // Salvar no localStorage
-        localStorage.setItem('user', JSON.stringify(user));
-        console.log('✅ Login realizado com usuário do Firestore:', user.email);
-        return user;
+      const response = await fetch(`${SERVER_BASE}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(credentials),
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        console.warn('❌ Login falhou:', err.error || response.statusText);
+        return null;
       }
+
+      const data = await response.json();
+      const session: AuthSession = {
+        token: data.token,
+        user: data.user,
+      };
+
+      localStorage.setItem('auth_session', JSON.stringify(session));
+      console.log('✅ Login realizado:', session.user.email);
+      return session.user;
     } catch (error) {
-      console.warn('⚠️ Erro ao buscar usuário do Firestore, usando cache local:', error);
+      console.error('❌ Erro no login:', error);
+      return null;
     }
-    
-    // Fallback: garantir que as credenciais foram carregadas
-    if (!this.usersLoaded) {
-      await this.loadCredentials();
-    }
-    
-    // Buscar no array de usuários carregados
-    const user = this.users.find(
-      u => u.email === credentials.email && u.password === credentials.password
-    );
-
-    if (user) {
-      // Salvar no localStorage
-      localStorage.setItem('user', JSON.stringify(user));
-      console.log('✅ Login realizado com usuário do cache local:', user.email);
-      return user;
-    }
-
-    console.warn('❌ Credenciais inválidas para:', credentials.email);
-    return null;
   }
 
-  logout(): void {
-    localStorage.removeItem('user');
+  async logout(): Promise<void> {
+    const token = this.getToken();
+    if (token) {
+      try {
+        await fetch(`${SERVER_BASE}/api/auth/logout`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+        });
+      } catch (err) {
+        console.warn('⚠️ Erro ao fazer logout no servidor:', err);
+      }
+    }
+    localStorage.removeItem('auth_session');
   }
 
   getCurrentUser(): User | null {
-    const userStr = localStorage.getItem('user');
-    if (userStr) {
+    const sessionStr = localStorage.getItem('auth_session');
+    if (sessionStr) {
       try {
-        return JSON.parse(userStr);
-      } catch (error) {
-        console.error('Erro ao parsear usuário:', error);
+        const session: AuthSession = JSON.parse(sessionStr);
+        return session.user;
+      } catch {
         return null;
       }
     }
     return null;
   }
 
+  getToken(): string | null {
+    const sessionStr = localStorage.getItem('auth_session');
+    if (sessionStr) {
+      try {
+        const session: AuthSession = JSON.parse(sessionStr);
+        return session.token;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  hasPermission(tab: TabPermission): boolean {
+    const user = this.getCurrentUser();
+    if (!user) return false;
+    if (user.role === 'admin') return true;
+    return user.permissions?.includes(tab) ?? false;
+  }
+
   isAuthenticated(): boolean {
-    return this.getCurrentUser() !== null;
+    return this.getCurrentUser() !== null && this.getToken() !== null;
   }
 
   getApiConfig(): ApiConfig | null {

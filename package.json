@@ -11,6 +11,7 @@
     "@types/node": "^16.18.126",
     "@types/react": "^19.1.12",
     "@types/react-dom": "^19.1.9",
+    "@uiw/react-md-editor": "^4.0.11",
     "axios": "^1.11.0",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",

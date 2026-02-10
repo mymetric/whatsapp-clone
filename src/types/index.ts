@@ -52,11 +52,14 @@ export interface Chat {
   lastMessageTime?: string;
 }
 
+export type TabPermission = 'conversas-leads' | 'file-processing' | 'whatsapp' | 'contencioso' | 'prompts' | 'admin';
+
 export interface User {
   email: string;
-  password: string;
+  password?: string;
   name: string;
   role: 'admin' | 'user';
+  permissions: TabPermission[];
 }
 
 export interface LoginCredentials {
@@ -67,8 +70,9 @@ export interface LoginCredentials {
 export interface AuthContextType {
   user: User | null;
   login: (credentials: LoginCredentials) => Promise<boolean>;
-  logout: () => void;
+  logout: () => Promise<void>;
   isAuthenticated: boolean;
+  hasPermission: (tab: TabPermission) => boolean;
 }
 
 export interface ApiConfig {

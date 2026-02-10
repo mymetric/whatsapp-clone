@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { mondayService, MondayBoardItem, MondayColumn } from '../services/mondayService';
 import { indexedDBService } from '../services/indexedDBService';
+import { authService } from '../services/auth';
 import LeadDetailsPanel from './LeadDetailsPanel';
 import './ConversasLeadsTab.css';
 
@@ -170,7 +171,10 @@ const ConversasLeadsTab: React.FC = () => {
   // Buscar telefones únicos do WhatsApp
   const fetchWhatsappPhones = async () => {
     try {
-      const response = await fetch('/api/firestore/unique-phones');
+      const phonesHeaders: Record<string, string> = {};
+      const phonesToken = authService.getToken();
+      if (phonesToken) phonesHeaders['Authorization'] = `Bearer ${phonesToken}`;
+      const response = await fetch('/api/firestore/unique-phones', { headers: phonesHeaders });
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }

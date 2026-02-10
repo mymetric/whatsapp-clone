@@ -4,7 +4,8 @@ import ReactMarkdown from 'react-markdown';
 import { MondayBoardItem, mondayService, MondayUpdate } from '../services/mondayService';
 import { firestoreMessagesService, FirestoreMessage } from '../services/firestoreMessagesService';
 import { messageService } from '../services/messageService';
-import { promptService, Prompt } from '../services/api';
+import { promptService, Prompt, documentService, DocumentAnalysis, emailService } from '../services/api';
+import { DocumentRecord } from '../types';
 import { grokService } from '../services/grokService';
 import './LeadDetailsPanel.css';
 
@@ -16,10 +17,10 @@ interface LeadDetailsPanelProps {
   boardId?: string | number;
   onClose: () => void;
   onLeadCreated?: () => void;
-  defaultTab?: 'details' | 'updates' | 'whatsapp' | 'copilot';
+  defaultTab?: 'details' | 'updates' | 'whatsapp' | 'copilot' | 'documents' | 'emails';
 }
 
-type TabType = 'details' | 'updates' | 'whatsapp' | 'copilot';
+type TabType = 'details' | 'updates' | 'whatsapp' | 'copilot' | 'documents' | 'emails';
 
 interface CopilotMessage {
   id: string;
@@ -77,6 +78,23 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
   const [copilotLoading, setCopilotLoading] = useState(false);
   const copilotEndRef = useRef<HTMLDivElement>(null);
 
+  // Estados para pré-sumarização do contexto
+  const [contextSummary, setContextSummary] = useState<string | null>(null);
+  const [generatingSummary, setGeneratingSummary] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+
+  // Estados para documentos (usados no contexto do Copiloto)
+  const [leadDocuments, setLeadDocuments] = useState<DocumentRecord[]>([]);
+  const [documentAnalysis, setDocumentAnalysis] = useState<DocumentAnalysis | null>(null);
+  const [documentsLoaded, setDocumentsLoaded] = useState(false);
+  const [expandedDocs, setExpandedDocs] = useState<Set<string>>(new Set());
+
+  // Estados para emails
+  const [leadEmails, setLeadEmails] = useState<any[]>([]);
+  const [emailsLoading, setEmailsLoading] = useState(false);
+  const [emailsLoaded, setEmailsLoaded] = useState(false);
+  const [expandedEmails, setExpandedEmails] = useState<Set<string>>(new Set());
+
   // Verificar se é um item órfão (sem lead no Monday)
   const isOrphan = item.id.startsWith('whatsapp_');
 
@@ -87,6 +105,19 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
     setWhatsappError(null);
     setUpdates([]);
     setCopilotMessages([]);
+    setLeadDocuments([]);
+    setDocumentAnalysis(null);
+    setDocumentsLoaded(false);
+    setExpandedDocs(new Set());
+    setLeadEmails([]);
+    setEmailsLoaded(false);
+    setExpandedEmails(new Set());
+    setContextSummary(null);
+    setGeneratingSummary(false);
+    setSummaryError(null);
+    setNewMessage('');
+    setShowMessageInput(false);
+    setCopilotInput('');
     setActiveTab('whatsapp');
   }, [item.id]);
 
@@ -200,6 +231,73 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
     return null;
   }, [item.column_values, columns]);
 
+  // Encontra o email do lead nas colunas
+  const getLeadEmail = useCallback((): string | null => {
+    if (!item.column_values) return null;
+
+    const emailKeywords = ['email', 'e_mail', 'e-mail', 'mail'];
+
+    for (const col of item.column_values) {
+      const colId = col.id?.toLowerCase() || '';
+      const colTitle = columns.find(c => c.id === col.id)?.title?.toLowerCase() || '';
+
+      if (emailKeywords.some(kw => colId.includes(kw) || colTitle.includes(kw))) {
+        if (col.text && col.text.trim() && col.text.includes('@')) {
+          return col.text.trim();
+        }
+      }
+    }
+    return null;
+  }, [item.column_values, columns]);
+
+  // Carrega emails do lead
+  const loadLeadEmails = useCallback(async () => {
+    const email = getLeadEmail();
+    if (!email || emailsLoaded) return;
+
+    setEmailsLoading(true);
+    try {
+      const emailData = await emailService.getEmailByEmail(email);
+      if (emailData) {
+        // Combinar emails enviados e recebidos
+        const allEmails: any[] = [];
+
+        if (emailData.destination && Array.isArray(emailData.destination)) {
+          emailData.destination.forEach((e: any) => {
+            allEmails.push({ ...e, direction: 'received' });
+          });
+        }
+        if (emailData.sender && Array.isArray(emailData.sender)) {
+          emailData.sender.forEach((e: any) => {
+            allEmails.push({ ...e, direction: 'sent' });
+          });
+        }
+
+        // Ordenar por data (mais recentes primeiro)
+        allEmails.sort((a, b) => {
+          const dateA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+          const dateB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+          return dateB - dateA;
+        });
+
+        setLeadEmails(allEmails);
+      }
+      setEmailsLoaded(true);
+    } catch (error) {
+      console.error('Erro ao carregar emails:', error);
+      setEmailsLoaded(true);
+    } finally {
+      setEmailsLoading(false);
+    }
+  }, [getLeadEmail, emailsLoaded]);
+
+  // Carregar emails quando a aba for selecionada
+  useEffect(() => {
+    if (activeTab === 'emails' && !emailsLoaded) {
+      loadLeadEmails();
+    }
+  }, [activeTab, emailsLoaded, loadLeadEmails]);
+
   // Carrega mensagens do WhatsApp
   const loadWhatsappMessages = useCallback(async () => {
     const phone = getLeadPhone();
@@ -239,6 +337,190 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
     }
   }, [activeTab, whatsappLoaded, loadWhatsappMessages]);
 
+  // Carregar documentos para o contexto do Copiloto
+  const loadDocuments = useCallback(async () => {
+    const phone = getLeadPhone();
+    if (!phone || documentsLoaded) return;
+
+    try {
+      // Criar um objeto Phone fake para o documentService
+      const phoneObj = {
+        _id: phone,
+        email: item.column_values?.find(c => c.id?.toLowerCase().includes('email'))?.text || undefined,
+        pulse_id: !isOrphan ? item.id : undefined,
+      };
+
+      const [docs, analysis] = await Promise.all([
+        documentService.getDocumentsForContact(phoneObj as any).catch(() => []),
+        phoneObj.pulse_id ? documentService.getDocumentAnalysis(phoneObj.pulse_id).catch(() => null) : Promise.resolve(null),
+      ]);
+
+      setLeadDocuments(docs);
+      setDocumentAnalysis(analysis);
+      setDocumentsLoaded(true);
+      console.log(`📄 Documentos carregados para copiloto: ${docs.length} docs, análise: ${analysis ? 'sim' : 'não'}`);
+    } catch (error) {
+      console.error('Erro ao carregar documentos para copiloto:', error);
+      setDocumentsLoaded(true);
+    }
+  }, [getLeadPhone, documentsLoaded, item, isOrphan]);
+
+  // Carregar documentos quando a aba copilot, details ou documents for selecionada
+  useEffect(() => {
+    if ((activeTab === 'copilot' || activeTab === 'details' || activeTab === 'documents') && !documentsLoaded) {
+      loadDocuments();
+    }
+  }, [activeTab, documentsLoaded, loadDocuments]);
+
+  // Função para gerar contexto completo (sem truncamento) para sumarização
+  const getFullContext = useCallback((): string => {
+    const phone = getLeadPhone();
+    let context = `## Dados do Lead:\n`;
+    context += `- Nome: ${item.name || 'Não informado'}\n`;
+    context += `- Telefone: ${phone || 'Não informado'}\n`;
+
+    // Adicionar todos os dados das colunas
+    if (item.column_values) {
+      item.column_values.forEach(col => {
+        if (col.text && col.text.trim()) {
+          const colTitle = columns.find(c => c.id === col.id)?.title || col.id;
+          context += `- ${colTitle}: ${col.text}\n`;
+        }
+      });
+    }
+
+    // Adicionar análise de documentos completa
+    if (documentAnalysis) {
+      context += `\n## Análise de Documentos do Monday:\n`;
+      if (documentAnalysis.checklist) {
+        context += `### Checklist:\n${documentAnalysis.checklist}\n`;
+      }
+      if (documentAnalysis.analise) {
+        context += `### Análise:\n${documentAnalysis.analise}\n`;
+      }
+    }
+
+    // Adicionar todos os documentos
+    if (leadDocuments.length > 0) {
+      context += `\n## Documentos do Lead (${leadDocuments.length} documentos):\n`;
+      leadDocuments.forEach((doc, idx) => {
+        const origin = doc.origin === 'email' ? 'Email' : 'Telefone';
+        const direction = doc.direction === 'sent' ? 'Enviado' : 'Recebido';
+        const subject = doc.metadata?.subject || 'Sem assunto';
+        context += `\n### Documento ${idx + 1} (${origin} - ${direction}):\n`;
+        context += `- Assunto: ${subject}\n`;
+        if (doc.text) {
+          context += `- Conteúdo: ${doc.text}\n`;
+        }
+        if (doc.images && doc.images.length > 0) {
+          doc.images.forEach((img, imgIdx) => {
+            if (img.extractedText) {
+              context += `- Arquivo ${imgIdx + 1} (transcrição): ${img.extractedText}\n`;
+            }
+          });
+        }
+      });
+    }
+
+    // Adicionar TODAS as mensagens do WhatsApp
+    if (whatsappMessages.length > 0) {
+      context += `\n## Histórico COMPLETO de Conversa WhatsApp (${whatsappMessages.length} mensagens):\n`;
+      whatsappMessages.forEach((msg, idx) => {
+        const sender = msg.source === 'Contact' ? 'Cliente' : 'Atendente';
+        const time = msg.timestamp ? new Date(msg.timestamp).toLocaleString('pt-BR') : '';
+        context += `${idx + 1}. [${time}] ${sender}: ${msg.content}\n`;
+      });
+    }
+
+    // Adicionar updates do Monday
+    if (updates.length > 0) {
+      context += `\n## Updates do Monday (${updates.length}):\n`;
+      updates.forEach((update, idx) => {
+        const creator = update.creator?.name || 'Desconhecido';
+        const date = mondayService.formatDate(update.created_at);
+        const body = mondayService.formatUpdateBody(update.body);
+        context += `${idx + 1}. [${date}] ${creator}: ${body}\n`;
+      });
+    }
+
+    return context;
+  }, [item, columns, whatsappMessages, getLeadPhone, documentAnalysis, leadDocuments, updates]);
+
+  // Função para gerar o resumo do contexto
+  const generateContextSummary = useCallback(async () => {
+    if (contextSummary || generatingSummary) return;
+
+    setGeneratingSummary(true);
+    setSummaryError(null);
+
+    try {
+      const fullContext = getFullContext();
+
+      // Se o contexto for pequeno, não precisa sumarizar
+      if (fullContext.length < 3000) {
+        setContextSummary(fullContext);
+        setGeneratingSummary(false);
+        console.log('📋 Contexto pequeno, usando direto sem sumarização');
+        return;
+      }
+
+      console.log(`🤖 Gerando resumo do contexto (${fullContext.length} chars)...`);
+
+      const summaryPrompt = `Você é um assistente especializado em criar resumos estruturados para atendimento de leads.
+
+Analise o contexto completo abaixo e crie um RESUMO ESTRUTURADO que preserve todas as informações importantes para um atendente ou assistente de IA.
+
+O resumo deve incluir:
+1. **Perfil do Lead**: Nome, contato, dados demográficos relevantes
+2. **Situação/Caso**: O que o lead precisa, qual o problema ou necessidade
+3. **Histórico de Interações**: Resumo cronológico das conversas mais relevantes
+4. **Documentos Relevantes**: O que foi enviado/recebido e principais informações
+5. **Status Atual**: Em que ponto está o atendimento
+6. **Pontos de Atenção**: Informações críticas que não podem ser ignoradas
+
+IMPORTANTE:
+- Seja detalhado mas conciso
+- Preserve datas, valores, nomes e informações factuais
+- Destaque informações que podem ser úteis para o próximo contato
+- Máximo de 2000 palavras
+
+CONTEXTO COMPLETO:
+${fullContext}`;
+
+      const summary = await grokService.generateResponse(summaryPrompt, {
+        systemPrompt: 'Você é um assistente especializado em sumarização de contexto para atendimento. Crie resumos estruturados e úteis.',
+      });
+
+      setContextSummary(summary);
+      console.log(`✅ Resumo gerado com sucesso (${summary.length} chars)`);
+    } catch (error) {
+      console.error('Erro ao gerar resumo do contexto:', error);
+      setSummaryError('Erro ao gerar resumo. Usando contexto truncado.');
+      // Em caso de erro, usar o contexto normal (truncado)
+      setContextSummary(null);
+    } finally {
+      setGeneratingSummary(false);
+    }
+  }, [contextSummary, generatingSummary, getFullContext]);
+
+  // Gerar resumo quando os dados estiverem carregados (para WhatsApp e Copilot)
+  useEffect(() => {
+    // Gerar resumo quando WhatsApp ou Copilot estiver ativo e dados carregados
+    const shouldGenerateSummary = (activeTab === 'copilot' || activeTab === 'whatsapp')
+      && whatsappLoaded
+      && !contextSummary
+      && !generatingSummary;
+
+    if (shouldGenerateSummary) {
+      // Para WhatsApp, também carregar documentos se ainda não carregados
+      if (activeTab === 'whatsapp' && !documentsLoaded) {
+        loadDocuments();
+      } else if (documentsLoaded) {
+        generateContextSummary();
+      }
+    }
+  }, [activeTab, whatsappLoaded, documentsLoaded, contextSummary, generatingSummary, generateContextSummary, loadDocuments]);
+
   // Scroll para o final das mensagens
   const scrollToBottom = useCallback(() => {
     if (messagesEndRef.current) {
@@ -272,7 +554,7 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
   // Obter contexto do lead para os prompts
   const getLeadContext = useCallback((): string => {
     const phone = getLeadPhone();
-    let context = `Dados do Lead:\n`;
+    let context = `## Dados do Lead:\n`;
     context += `- Nome: ${item.name || 'Não informado'}\n`;
     context += `- Telefone: ${phone || 'Não informado'}\n`;
 
@@ -286,19 +568,70 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
       });
     }
 
-    // Adicionar últimas mensagens
+    // Adicionar análise de documentos (se disponível)
+    if (documentAnalysis) {
+      context += `\n## Análise de Documentos do Monday:\n`;
+      if (documentAnalysis.checklist) {
+        context += `### Checklist:\n${documentAnalysis.checklist}\n`;
+      }
+      if (documentAnalysis.analise) {
+        // Limitar análise a 2000 caracteres para não estourar contexto
+        const analysisText = documentAnalysis.analise.length > 2000
+          ? documentAnalysis.analise.substring(0, 2000) + '...[truncado]'
+          : documentAnalysis.analise;
+        context += `### Análise:\n${analysisText}\n`;
+      }
+    }
+
+    // Adicionar documentos (resumo)
+    if (leadDocuments.length > 0) {
+      context += `\n## Documentos do Lead (${leadDocuments.length} documentos):\n`;
+      // Limitar a 10 documentos mais recentes e 500 chars por documento
+      const recentDocs = leadDocuments.slice(0, 10);
+      recentDocs.forEach((doc, idx) => {
+        const origin = doc.origin === 'email' ? 'Email' : 'Telefone';
+        const direction = doc.direction === 'sent' ? 'Enviado' : 'Recebido';
+        const subject = doc.metadata?.subject || 'Sem assunto';
+        context += `\n### Documento ${idx + 1} (${origin} - ${direction}):\n`;
+        context += `- Assunto: ${subject}\n`;
+        if (doc.text) {
+          const docText = doc.text.length > 500
+            ? doc.text.substring(0, 500) + '...[truncado]'
+            : doc.text;
+          context += `- Conteúdo: ${docText}\n`;
+        }
+        // Adicionar texto extraído de imagens/PDFs
+        if (doc.images && doc.images.length > 0) {
+          doc.images.forEach((img, imgIdx) => {
+            if (img.extractedText) {
+              const extractedText = img.extractedText.length > 300
+                ? img.extractedText.substring(0, 300) + '...[truncado]'
+                : img.extractedText;
+              context += `- Arquivo ${imgIdx + 1} (transcrição): ${extractedText}\n`;
+            }
+          });
+        }
+      });
+    }
+
+    // Adicionar histórico de mensagens (últimas 50 mensagens)
     if (whatsappMessages.length > 0) {
-      context += `\nÚltimas mensagens da conversa:\n`;
-      const recentMessages = whatsappMessages.slice(-10);
+      const messageLimit = 50;
+      const recentMessages = whatsappMessages.slice(-messageLimit);
+      context += `\n## Histórico de Conversa WhatsApp (${recentMessages.length} de ${whatsappMessages.length} mensagens):\n`;
       recentMessages.forEach((msg, idx) => {
         const sender = msg.source === 'Contact' ? 'Cliente' : 'Atendente';
         const time = msg.timestamp ? new Date(msg.timestamp).toLocaleString('pt-BR') : '';
-        context += `${idx + 1}. [${time}] ${sender}: ${msg.content}\n`;
+        // Limitar cada mensagem a 500 chars
+        const content = msg.content && msg.content.length > 500
+          ? msg.content.substring(0, 500) + '...'
+          : msg.content;
+        context += `${idx + 1}. [${time}] ${sender}: ${content}\n`;
       });
     }
 
     return context;
-  }, [item, columns, whatsappMessages, getLeadPhone]);
+  }, [item, columns, whatsappMessages, getLeadPhone, documentAnalysis, leadDocuments]);
 
   // Usar prompt para gerar resposta
   const handleUsePrompt = async (prompt: Prompt) => {
@@ -307,11 +640,14 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
 
     setUsingPrompt(prompt.id);
     try {
-      const leadContext = getLeadContext();
+      // Usar o resumo pré-gerado se disponível, senão usar contexto truncado
+      const leadContext = contextSummary || getLeadContext();
 
       const systemContext = `${prompt.content}
 
+--- CONTEXTO DO LEAD ---
 ${leadContext}
+--- FIM DO CONTEXTO ---
 
 Instruções:
 - Seja sempre profissional e prestativo
@@ -696,6 +1032,260 @@ Instruções:
     );
   };
 
+  // Toggle para expandir/colapsar texto do documento
+  const toggleDocExpanded = (docId: string) => {
+    setExpandedDocs(prev => {
+      const newSet = new Set(Array.from(prev));
+      if (newSet.has(docId)) {
+        newSet.delete(docId);
+      } else {
+        newSet.add(docId);
+      }
+      return newSet;
+    });
+  };
+
+  // Toggle para expandir/colapsar texto do email
+  const toggleEmailExpanded = (emailId: string) => {
+    setExpandedEmails(prev => {
+      const newSet = new Set(Array.from(prev));
+      if (newSet.has(emailId)) {
+        newSet.delete(emailId);
+      } else {
+        newSet.add(emailId);
+      }
+      return newSet;
+    });
+  };
+
+  // Renderizar aba de documentos
+  const renderDocumentsTab = () => {
+    return (
+      <div className="tab-content documents-tab">
+        {/* Seção de Documentos */}
+        <div className="documents-section">
+          <div className="documents-section-header">
+            <span className="documents-icon">📎</span>
+            <h4>Documentos do Lead</h4>
+            {leadDocuments.length > 0 && (
+              <span className="documents-count">{leadDocuments.length}</span>
+            )}
+          </div>
+
+          {!documentsLoaded ? (
+            <div className="documents-loading">
+              <div className="loading-spinner-small"></div>
+              <span>Carregando documentos...</span>
+            </div>
+          ) : leadDocuments.length === 0 ? (
+            <div className="documents-empty">
+              <span>Nenhum documento encontrado para este lead</span>
+            </div>
+          ) : (
+            <div className="documents-list">
+              {leadDocuments.map((doc, idx) => (
+                <div key={doc.id || idx} className="document-item">
+                  <div className="document-icon">
+                    {doc.origin === 'email' ? '📧' : '📱'}
+                  </div>
+                  <div className="document-content">
+                    <div className="document-header">
+                      <span className="document-title">
+                        {doc.metadata?.subject || doc.name || `Documento ${idx + 1}`}
+                      </span>
+                      <span className={`document-badge ${doc.direction || 'received'}`}>
+                        {doc.direction === 'sent' ? 'Enviado' : 'Recebido'}
+                      </span>
+                    </div>
+                    {doc.createdAt && (
+                      <div className="document-date">
+                        {new Date(doc.createdAt).toLocaleDateString('pt-BR', {
+                          day: '2-digit',
+                          month: '2-digit',
+                          year: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </div>
+                    )}
+                    {doc.text && (
+                      <div
+                        className={`document-preview ${expandedDocs.has(doc.id || `doc-${idx}`) ? 'expanded' : 'collapsed'}`}
+                        onClick={() => toggleDocExpanded(doc.id || `doc-${idx}`)}
+                      >
+                        <span className="document-text">{doc.text}</span>
+                        <span className="document-expand-toggle">
+                          {expandedDocs.has(doc.id || `doc-${idx}`) ? '▲' : '▼'}
+                        </span>
+                      </div>
+                    )}
+                    {doc.images && doc.images.length > 0 && (
+                      <div className="document-attachments">
+                        {doc.images.map((img, imgIdx) => (
+                          <a
+                            key={img.fileId || imgIdx}
+                            href={img.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="document-attachment"
+                            title={img.extractedText ? 'Clique para abrir (contém texto extraído)' : 'Clique para abrir'}
+                          >
+                            <span className="attachment-icon">📄</span>
+                            <span className="attachment-name">
+                              Anexo {imgIdx + 1}
+                              {img.extractedText && <span className="has-text-badge">OCR</span>}
+                            </span>
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Análise de Documentos do Monday */}
+        {documentAnalysis && (
+          <div className="document-analysis-section">
+            <div className="documents-section-header">
+              <span className="documents-icon">🔍</span>
+              <h4>Análise de Documentos</h4>
+            </div>
+            {documentAnalysis.checklist && (
+              <div className="analysis-block">
+                <div className="analysis-label">Checklist</div>
+                <div className="analysis-content">
+                  <ReactMarkdown>{documentAnalysis.checklist}</ReactMarkdown>
+                </div>
+              </div>
+            )}
+            {documentAnalysis.analise && (
+              <div className="analysis-block">
+                <div className="analysis-label">Análise</div>
+                <div className="analysis-content">
+                  <ReactMarkdown>{documentAnalysis.analise}</ReactMarkdown>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // Renderizar aba de emails
+  const renderEmailsTab = () => {
+    const email = getLeadEmail();
+
+    if (!email) {
+      return (
+        <div className="tab-content emails-tab">
+          <div className="emails-empty">
+            <span className="empty-icon">📧</span>
+            <p>Email não encontrado nos dados do lead</p>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="tab-content emails-tab">
+        <div className="emails-header-info">
+          <span className="emails-label">📧 {email}</span>
+          <span className="emails-count">{leadEmails.length} emails</span>
+          <button
+            className="emails-refresh-btn"
+            onClick={() => {
+              setEmailsLoaded(false);
+              loadLeadEmails();
+            }}
+            title="Atualizar emails"
+          >
+            🔄
+          </button>
+        </div>
+
+        {emailsLoading ? (
+          <div className="emails-loading">
+            <div className="loading-spinner-small"></div>
+            <p>Carregando emails...</p>
+          </div>
+        ) : leadEmails.length === 0 ? (
+          <div className="emails-empty">
+            <span className="empty-icon">📭</span>
+            <p>Nenhum email encontrado</p>
+          </div>
+        ) : (
+          <div className="emails-list">
+            {leadEmails.map((emailItem, idx) => {
+              const emailId = emailItem.id || `email-${idx}`;
+              const isExpanded = expandedEmails.has(emailId);
+
+              return (
+                <div key={emailId} className={`email-item ${emailItem.direction}`}>
+                  <div className="email-header">
+                    <div className="email-subject">
+                      {emailItem.subject || '(Sem assunto)'}
+                    </div>
+                    <span className={`email-badge ${emailItem.direction}`}>
+                      {emailItem.direction === 'sent' ? '↑ Enviado' : '↓ Recebido'}
+                    </span>
+                  </div>
+                  <div className="email-meta">
+                    {emailItem.direction === 'sent' ? (
+                      <span>Para: {emailItem.destination}</span>
+                    ) : (
+                      <span>De: {emailItem.sender}</span>
+                    )}
+                    {emailItem.timestamp && (
+                      <span className="email-date">
+                        {new Date(emailItem.timestamp).toLocaleDateString('pt-BR', {
+                          day: '2-digit',
+                          month: '2-digit',
+                          year: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </span>
+                    )}
+                  </div>
+                  {emailItem.text && (
+                    <div
+                      className={`email-body ${isExpanded ? 'expanded' : 'collapsed'}`}
+                      onClick={() => toggleEmailExpanded(emailId)}
+                    >
+                      <span className="email-text">{emailItem.text}</span>
+                      <span className="email-expand-toggle">
+                        {isExpanded ? '▲' : '▼'}
+                      </span>
+                    </div>
+                  )}
+                  {emailItem.attachments && emailItem.attachments.length > 0 && (
+                    <div className="email-attachments">
+                      {emailItem.attachments.map((att: any, attIdx: number) => (
+                        <a
+                          key={attIdx}
+                          href={att.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="email-attachment"
+                        >
+                          📎 {att.name || `Anexo ${attIdx + 1}`}
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderUpdatesTab = () => {
     if (isOrphan) {
       return (
@@ -973,11 +1563,29 @@ Instruções:
     setCopilotInput('');
     setCopilotLoading(true);
     try {
-      const leadContext = getLeadContext();
-      const conversationHistory = whatsappMessages.length > 0
-        ? `\n\nÚltimas mensagens do WhatsApp:\n${whatsappMessages.slice(-10).map(m => `[${m.source}] ${m.name}: ${m.content}`).join('\n')}`
+      // Usar o resumo pré-gerado se disponível, senão usar contexto truncado
+      const leadContext = contextSummary || getLeadContext();
+      const contextSource = contextSummary ? 'RESUMO PRÉ-PROCESSADO' : 'CONTEXTO TRUNCADO';
+
+      // Histórico de conversa do copiloto para continuidade
+      const copilotHistory = copilotMessages.length > 0
+        ? `\n\nHistórico desta conversa com o Copiloto:\n${copilotMessages.slice(-6).map(m => `[${m.role === 'user' ? 'Usuário' : 'Assistente'}]: ${m.content}`).join('\n')}`
         : '';
-      const systemPrompt = `Você é um assistente especializado em análise de leads e vendas.\nAnalise os dados do lead e responda às perguntas do usuário de forma útil e objetiva.\n\n${leadContext}${conversationHistory}\n\nResponda de forma concisa e profissional.`;
+
+      const systemPrompt = `Você é um assistente especializado em análise de leads e vendas.
+Analise os dados do lead e responda às perguntas do usuário de forma útil e objetiva.
+
+--- ${contextSource} DO LEAD ---
+${leadContext}
+--- FIM DO CONTEXTO ---
+${copilotHistory}
+
+Instruções:
+- Responda de forma concisa e profissional
+- Use as informações do contexto para dar respostas precisas
+- Se não souber algo, diga claramente
+- Formate a resposta de forma legível usando markdown quando apropriado`;
+
       const response = await grokService.generateResponse(userMessage.content, { systemPrompt });
       const assistantMessage: CopilotMessage = {
         id: `assistant_${Date.now()}`,
@@ -1009,6 +1617,24 @@ Instruções:
   const renderCopilotTab = () => {
     return (
       <div className="tab-content copilot-tab">
+        {/* Indicador de status do contexto */}
+        <div className="copilot-context-status">
+          {generatingSummary ? (
+            <div className="context-loading">
+              <div className="loading-spinner-tiny"></div>
+              <span>Analisando contexto completo do lead...</span>
+            </div>
+          ) : contextSummary ? (
+            <div className="context-ready">
+              <span className="context-badge success">✓ Contexto completo carregado</span>
+            </div>
+          ) : summaryError ? (
+            <div className="context-error">
+              <span className="context-badge warning">⚠ {summaryError}</span>
+            </div>
+          ) : null}
+        </div>
+
         <div className="copilot-messages">
           {copilotMessages.length === 0 ? (
             <div className="copilot-welcome">
@@ -1016,9 +1642,9 @@ Instruções:
               <h3>Copiloto de Vendas</h3>
               <p>Pergunte qualquer coisa sobre este lead:</p>
               <div className="copilot-suggestions">
-                <button onClick={() => setCopilotInput('Resuma os dados deste lead')}>Resumir dados</button>
-                <button onClick={() => setCopilotInput('Qual a melhor abordagem para este lead?')}>Sugerir abordagem</button>
-                <button onClick={() => setCopilotInput('Analise a conversa do WhatsApp')}>Analisar conversa</button>
+                <button onClick={() => setCopilotInput('Resuma os dados deste lead')} disabled={generatingSummary}>Resumir dados</button>
+                <button onClick={() => setCopilotInput('Qual a melhor abordagem para este lead?')} disabled={generatingSummary}>Sugerir abordagem</button>
+                <button onClick={() => setCopilotInput('Analise a conversa do WhatsApp')} disabled={generatingSummary}>Analisar conversa</button>
               </div>
             </div>
           ) : (
@@ -1105,10 +1731,22 @@ Instruções:
           📝 Updates {updates.length > 0 && <span className="tab-badge">{updates.length}</span>}
         </button>
         <button
+          className={`panel-tab ${activeTab === 'documents' ? 'active' : ''}`}
+          onClick={() => setActiveTab('documents')}
+        >
+          📎 Docs
+        </button>
+        <button
+          className={`panel-tab ${activeTab === 'emails' ? 'active' : ''}`}
+          onClick={() => setActiveTab('emails')}
+        >
+          📧 Emails
+        </button>
+        <button
           className={`panel-tab ${activeTab === 'copilot' ? 'active' : ''}`}
           onClick={() => setActiveTab('copilot')}
         >
-          🤖 Copiloto
+          🤖 IA
         </button>
       </div>
 
@@ -1117,6 +1755,8 @@ Instruções:
         {activeTab === 'details' && renderDetailsTab()}
         {activeTab === 'updates' && renderUpdatesTab()}
         {activeTab === 'whatsapp' && renderWhatsAppTab()}
+        {activeTab === 'documents' && renderDocumentsTab()}
+        {activeTab === 'emails' && renderEmailsTab()}
         {activeTab === 'copilot' && renderCopilotTab()}
       </div>
 

@@ -1,3 +1,5 @@
+import { authService } from './auth';
+
 // ============================================================================
 // INTERFACES - Tipos de dados do Monday.com
 // ============================================================================
@@ -81,6 +83,13 @@ interface MondayBoardResponse {
 // MONDAY SERVICE - Serviço para interação com Monday.com
 // ============================================================================
 
+function getAuthHeaders(): Record<string, string> {
+  const token = authService.getToken();
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  return headers;
+}
+
 class MondayService {
   // --------------------------------------------------------------------------
   // Métodos públicos - Buscar updates por telefone
@@ -94,9 +103,7 @@ class MondayService {
 
       const response = await fetch(url, {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: getAuthHeaders(),
       });
 
       if (!response.ok) {
@@ -131,9 +138,7 @@ class MondayService {
 
       const response = await fetch(url, {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: getAuthHeaders(),
       });
 
       if (!response.ok) {
@@ -167,9 +172,7 @@ class MondayService {
 
     const response = await fetch(url, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: getAuthHeaders(),
     });
 
     if (!response.ok) {
@@ -224,9 +227,7 @@ class MondayService {
 
     const response = await fetch(url, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: getAuthHeaders(),
     });
 
     if (!response.ok) {
@@ -302,14 +303,12 @@ class MondayService {
     }
 
     try {
-      const url = `/api/monday/update`;
+      const url = `/api/monday/write?action=update`;
       console.log('📝 Monday: Criando update via backend local', itemId);
 
       const response = await fetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: getAuthHeaders(),
         body: JSON.stringify({
           itemId,
           body: body.trim(),
@@ -341,7 +340,7 @@ class MondayService {
     }
 
     try {
-      const url = `/api/monday/create-item`;
+      const url = `/api/monday/write?action=create-item`;
       console.log('📝 Monday: Criando item via backend local', { boardId, itemName });
       console.log('📝 Column values sendo enviados:', JSON.stringify(columnValues, null, 2));
 
@@ -354,9 +353,7 @@ class MondayService {
 
       const response = await fetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: getAuthHeaders(),
         body: JSON.stringify(payload),
       });
 

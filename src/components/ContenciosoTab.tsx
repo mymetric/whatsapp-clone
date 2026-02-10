@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { mondayService, MondayUpdate } from '../services/mondayService';
 import { firestoreRestAttachmentService, firestoreRestContenciosoPromptService, Attachment } from '../services/firestoreRestService';
 import { Prompt } from '../services/api';
+import { authService } from '../services/auth';
 import ContenciosoPromptsManager from './ContenciosoPromptsManager';
 import { contenciosoCacheService } from '../services/contenciosoCacheService';
 import './MondayTab.css';
@@ -507,7 +508,10 @@ Use esse contexto para responder perguntas sobre o processo, andamentos e riscos
 
     // Usa proxy do backend para evitar CORS
     const proxyUrl = `/api/proxy-file?url=${encodeURIComponent(att.file_url)}`;
-    const resp = await fetch(proxyUrl);
+    const authHeaders: Record<string, string> = {};
+    const authToken = authService.getToken();
+    if (authToken) authHeaders['Authorization'] = `Bearer ${authToken}`;
+    const resp = await fetch(proxyUrl, { headers: authHeaders });
     if (!resp.ok) {
       const txt = await resp.text();
       throw new Error(`Falha ao baixar anexo (${resp.status}): ${txt}`);
@@ -611,11 +615,13 @@ Use esse contexto para responder perguntas sobre o processo, andamentos e riscos
       console.log(`  - files array length: ${payload.files.length}`);
       console.log(`  - payload size (approx): ${JSON.stringify(payload).length} caracteres`);
 
+      const grokHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+      const grokToken = authService.getToken();
+      if (grokToken) grokHeaders['Authorization'] = `Bearer ${grokToken}`;
+
       const response = await fetch('/api/grok/contencioso', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: grokHeaders,
         body: JSON.stringify(payload),
       });
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Phone } from '../types';
 import { emailService } from '../services/api';
 import './EmailTab.css';
@@ -31,7 +31,7 @@ const EmailTab: React.FC<EmailTabProps> = ({ selectedPhone }) => {
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
   const [showFullEmail, setShowFullEmail] = useState(false);
 
-  const loadEmails = async () => {
+  const loadEmails = useCallback(async () => {
     if (!selectedPhone) return;
 
     setLoading(true);
@@ -40,18 +40,18 @@ const EmailTab: React.FC<EmailTabProps> = ({ selectedPhone }) => {
     try {
       console.log('📧 EmailTab: Carregando emails para:', selectedPhone.lead_name || selectedPhone._id);
       const emailData = await emailService.getEmailForContact(selectedPhone);
-      
+
       if (emailData && typeof emailData === 'object') {
         const data = emailData as any;
         let emailsArray: Email[] = [];
-        
+
         // Verificar se há emails em 'destination'
         if (Array.isArray(data.destination) && data.destination.length > 0) {
           // Filtrar objetos vazios
           emailsArray = data.destination.filter((email: any) => email && Object.keys(email).length > 0);
           console.log('📧 EmailTab: Emails encontrados em destination:', emailsArray.length);
         }
-        
+
         // Verificar se há emails em 'sender' (caso contrário do fluxo)
         if (Array.isArray(data.sender) && data.sender.length > 0) {
           // Filtrar objetos vazios
@@ -59,7 +59,7 @@ const EmailTab: React.FC<EmailTabProps> = ({ selectedPhone }) => {
           emailsArray = [...emailsArray, ...senderEmails];
           console.log('📧 EmailTab: Emails encontrados em sender:', senderEmails.length);
         }
-        
+
         if (emailsArray.length > 0) {
           console.log('📧 EmailTab: Total de emails encontrados:', emailsArray.length);
           setEmails(emailsArray);
@@ -80,7 +80,7 @@ const EmailTab: React.FC<EmailTabProps> = ({ selectedPhone }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedPhone]);
 
   useEffect(() => {
     if (selectedPhone) {
@@ -89,8 +89,7 @@ const EmailTab: React.FC<EmailTabProps> = ({ selectedPhone }) => {
       setEmails([]);
       setError(null);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedPhone]);
+  }, [selectedPhone, loadEmails]);
 
   const formatEmailDate = (timestamp: string) => {
     const date = new Date(timestamp);

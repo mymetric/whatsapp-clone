@@ -132,7 +132,7 @@ const PromptsManager: React.FC<PromptsManagerProps> = ({ onClose }) => {
   const [jsonDirty, setJsonDirty] = useState(false);
   const jsonFileInputRef = useRef<HTMLInputElement>(null);
 
-  const loadPrompts = async () => {
+  const loadPrompts = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -152,11 +152,11 @@ const PromptsManager: React.FC<PromptsManagerProps> = ({ onClose }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     loadPrompts();
-  }, []);
+  }, [loadPrompts]);
 
   const promptTree = useMemo(() => buildPromptTree(prompts, expandedIds), [prompts, expandedIds]);
   const flattenedPrompts = useMemo(() => flattenTree(promptTree, expandedIds), [promptTree, expandedIds]);

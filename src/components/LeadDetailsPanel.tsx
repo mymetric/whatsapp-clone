@@ -259,26 +259,31 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
     try {
       const emailData = await emailService.getEmailByEmail(email);
       if (emailData) {
-        // Combinar emails enviados e recebidos
-        const allEmails: any[] = [];
+        let allEmails: any[] = [];
 
-        if (emailData.destination && Array.isArray(emailData.destination)) {
-          emailData.destination.forEach((e: any) => {
-            allEmails.push({ ...e, direction: 'received' });
+        if (emailData._source === 'firestore' && emailData.emails) {
+          // Novo formato Firestore: emails já vêm com direction
+          allEmails = emailData.emails;
+        } else {
+          // Formato legado N8N: combinar destination + sender arrays
+          if (emailData.destination && Array.isArray(emailData.destination)) {
+            emailData.destination.forEach((e: any) => {
+              allEmails.push({ ...e, direction: 'received' });
+            });
+          }
+          if (emailData.sender && Array.isArray(emailData.sender)) {
+            emailData.sender.forEach((e: any) => {
+              allEmails.push({ ...e, direction: 'sent' });
+            });
+          }
+
+          // Ordenar por data (mais recentes primeiro)
+          allEmails.sort((a, b) => {
+            const dateA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+            const dateB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+            return dateB - dateA;
           });
         }
-        if (emailData.sender && Array.isArray(emailData.sender)) {
-          emailData.sender.forEach((e: any) => {
-            allEmails.push({ ...e, direction: 'sent' });
-          });
-        }
-
-        // Ordenar por data (mais recentes primeiro)
-        allEmails.sort((a, b) => {
-          const dateA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
-          const dateB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
-          return dateB - dateA;
-        });
 
         setLeadEmails(allEmails);
       }
@@ -538,12 +543,44 @@ ${fullContext}`;
     }
   }, [whatsappMessages, activeTab, scrollToBottom]);
 
-  // Carregar prompts
+  // Carregar apenas prompts filhos de "Atendimento", exibindo nome do pai
   useEffect(() => {
     const loadPrompts = async () => {
       try {
-        const promptsData = await promptService.getPrompts();
-        setPrompts(promptsData);
+        const allPrompts = await promptService.getPrompts();
+        const promptMap = new Map(allPrompts.map(p => [p.id, p]));
+
+        // Encontrar o(s) prompt(s) raiz "Atendimento"
+        const atendimentoRootIds = new Set(
+          allPrompts
+            .filter(p => (!p.parentId) && p.name.trim().toLowerCase() === 'atendimento')
+            .map(p => p.id)
+        );
+
+        // Verificar se um prompt é descendente de "Atendimento"
+        const getAtendimentoAncestor = (prompt: Prompt): boolean => {
+          let current = prompt;
+          const visited = new Set<string>();
+          while (current.parentId && !visited.has(current.parentId)) {
+            if (atendimentoRootIds.has(current.parentId)) return true;
+            visited.add(current.parentId);
+            const parent = promptMap.get(current.parentId);
+            if (!parent) break;
+            current = parent;
+          }
+          return false;
+        };
+
+        // Filtrar descendentes de "Atendimento" e exibir com nome do pai imediato
+        const filtered = allPrompts
+          .filter(p => p.parentId && getAtendimentoAncestor(p))
+          .map(p => {
+            const parent = promptMap.get(p.parentId!);
+            const parentName = parent ? parent.name : '';
+            return { ...p, name: parentName ? `${parentName} › ${p.name}` : p.name };
+          });
+
+        setPrompts(filtered);
       } catch (error) {
         console.error('Erro ao carregar prompts:', error);
       }

@@ -431,14 +431,49 @@ ${conversationHistory}`;
     }
   }, [newMessage]);
 
-  // Carregar prompts quando o componente montar
+  // Carregar apenas prompts filhos de "Atendimento", exibindo nome do pai
   useEffect(() => {
     const loadPrompts = async () => {
       setLoadingPrompts(true);
       try {
-        const promptsData = await promptService.getPrompts();
-        console.log('📋 Prompts carregados:', promptsData);
-        setPrompts(promptsData);
+        const allPrompts = await promptService.getPrompts();
+        console.log('📋 Todos os prompts carregados:', allPrompts);
+        const promptMap = new Map(allPrompts.map(p => [p.id, p]));
+
+        // Encontrar o(s) prompt(s) raiz "Atendimento"
+        const atendimentoRootIds = new Set(
+          allPrompts
+            .filter(p => (!p.parentId) && p.name.trim().toLowerCase() === 'atendimento')
+            .map(p => p.id)
+        );
+
+        // Verificar se um prompt é descendente de "Atendimento"
+        const getAtendimentoAncestor = (prompt: Prompt): boolean => {
+          let current = prompt;
+          const visited = new Set<string>();
+          while (current.parentId && !visited.has(current.parentId)) {
+            if (atendimentoRootIds.has(current.parentId)) return true;
+            visited.add(current.parentId);
+            const parent = promptMap.get(current.parentId);
+            if (!parent) break;
+            current = parent;
+          }
+          return false;
+        };
+
+        // Filtrar descendentes de "Atendimento" e exibir com nome do pai imediato
+        const filtered = allPrompts
+          .filter(p => p.parentId && getAtendimentoAncestor(p))
+          .map(p => {
+            const parent = promptMap.get(p.parentId!);
+            const parentName = parent ? parent.name : '';
+            return { ...p, name: parentName ? `${parentName} › ${p.name}` : p.name };
+          });
+
+        console.log('📋 Prompts de atendimento filtrados:', filtered);
+        console.log('📋 Raízes Atendimento encontradas:', atendimentoRootIds.size, Array.from(atendimentoRootIds));
+        console.log('📋 Todos os nomes raiz:', allPrompts.filter(p => !p.parentId).map(p => `"${p.name}"`));
+        setPrompts(filtered);
       } catch (error) {
         console.error('Erro ao carregar prompts:', error);
       } finally {

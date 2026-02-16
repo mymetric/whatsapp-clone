@@ -25,6 +25,7 @@ export interface MediaWebhook {
   thumbnailBase64?: string | null;
   source?: 'umbler' | 'email';
   attachmentIndex?: number;
+  totalAttachments?: number;
 }
 
 export interface FileProcessingItem {

@@ -21,9 +21,9 @@ const FileProcessingTab: React.FC = () => {
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
-  const [enqueuingIds, setEnqueuingIds] = useState<Set<string>>(new Set());
   const [webhookRaw, setWebhookRaw] = useState<WebhookRawResponse | null>(null);
   const [loadingRaw, setLoadingRaw] = useState(false);
+  const [pipelineStatus, setPipelineStatus] = useState<string>('idle');
 
   // Load data
   const loadQueue = useCallback(async () => {
@@ -54,47 +54,95 @@ const FileProcessingTab: React.FC = () => {
     loadAll();
   }, [loadAll]);
 
-  // Auto-refresh queue every 10s
-  useEffect(() => {
-    const interval = setInterval(loadQueue, 10000);
-    return () => clearInterval(interval);
-  }, [loadQueue]);
-
-  // Auto-process: processa itens da fila automaticamente enquanto o painel está aberto
-  const autoProcessingRef = useRef(false);
-  const queueItemsRef = useRef(queueItems);
-  queueItemsRef.current = queueItems;
+  // Auto-enqueue + auto-process
+  const autoPipelineRef = useRef(false);
+  const enqueuedKeysRef = useRef<Set<string>>(new Set()); // tracking de sessão
 
   useEffect(() => {
-    const runAutoProcess = async () => {
-      if (autoProcessingRef.current) return;
+    const makeKey = (id: string, source?: string, attIdx?: number) =>
+      source === 'email' && attIdx !== undefined ? `${id}_att${attIdx}` : id;
 
-      const queued = queueItemsRef.current.filter(i =>
-        i.status === 'queued' && (!i.nextRetryAt || i.nextRetryAt <= new Date().toISOString())
-      );
-      if (queued.length === 0) return;
+    const runAutoPipeline = async () => {
+      if (autoPipelineRef.current) return;
+      autoPipelineRef.current = true;
 
-      autoProcessingRef.current = true;
       try {
-        let keepGoing = true;
-        while (keepGoing) {
-          const result = await fileProcessingService.processNext();
-          keepGoing = result.processed;
-          if (keepGoing) {
-            await loadQueue();
-          }
+        // Buscar dados frescos
+        const [freshWebhooks, freshQueue] = await Promise.all([
+          fileProcessingService.getMediaWebhooks({ limit: 500 }),
+          fileProcessingService.getQueue({ limit: 1000 }),
+        ]);
+        setMediaWebhooks(freshWebhooks);
+        setQueueItems(freshQueue);
+
+        // Marcar tudo que já está na fila no tracking de sessão
+        for (const qi of freshQueue) {
+          enqueuedKeysRef.current.add(makeKey(qi.webhookId, qi.webhookSource, qi.attachmentIndex));
         }
+
+        // Filtrar: só enfileirar o que NUNCA foi tentado nesta sessão
+        const toEnqueue = freshWebhooks.filter(w => {
+          const key = makeKey(w.id, w.source, w.attachmentIndex);
+          return !enqueuedKeysRef.current.has(key);
+        });
+
+        if (toEnqueue.length > 0) {
+          setPipelineStatus(`enqueue:${toEnqueue.length}`);
+
+          // Marcar como tentados ANTES de enviar (evita retry no próximo ciclo)
+          for (const w of toEnqueue) {
+            enqueuedKeysRef.current.add(makeKey(w.id, w.source, w.attachmentIndex));
+          }
+
+          const umblerIds = Array.from(new Set(toEnqueue.filter(w => (w.source || 'umbler') === 'umbler').map(w => w.id)));
+          const emailItems = toEnqueue.filter(w => w.source === 'email');
+
+          if (umblerIds.length > 0) {
+            await fileProcessingService.enqueue(umblerIds, 'umbler');
+          }
+          for (const ew of emailItems) {
+            await fileProcessingService.enqueue([ew.id], 'email', ew.attachmentIndex);
+          }
+
+          const updatedQueue = await fileProcessingService.getQueue({ limit: 1000 });
+          setQueueItems(updatedQueue);
+        }
+
+        // Auto-process: processar em paralelo (3 de cada vez, até 50 por ciclo)
+        const CONCURRENCY = 3;
+        const MAX_PER_CYCLE = 50;
+        const queuedCount = (toEnqueue.length > 0 ? freshQueue.length : freshQueue.filter(i => i.status === 'queued').length);
+        if (queuedCount > 0) {
+          let totalProcessed = 0;
+          let hasMore = true;
+          while (hasMore && totalProcessed < MAX_PER_CYCLE) {
+            setPipelineStatus(`process:${totalProcessed}+`);
+            const batchSize = Math.min(CONCURRENCY, MAX_PER_CYCLE - totalProcessed);
+            const batch = Array.from({ length: batchSize }, () =>
+              fileProcessingService.processNext().catch(() => ({ processed: false }))
+            );
+            const results = await Promise.all(batch);
+            const batchProcessed = results.filter(r => r.processed).length;
+            totalProcessed += batchProcessed;
+            hasMore = batchProcessed > 0;
+          }
+          const updatedQueue = await fileProcessingService.getQueue({ limit: 1000 });
+          setQueueItems(updatedQueue);
+        }
+
+        setPipelineStatus('idle');
       } catch (err) {
-        console.error('Auto-process error:', err);
+        console.error('Auto-pipeline error:', err);
+        setPipelineStatus('idle');
       } finally {
-        autoProcessingRef.current = false;
+        autoPipelineRef.current = false;
       }
     };
 
-    runAutoProcess();
-    const interval = setInterval(runAutoProcess, 15000);
-    return () => clearInterval(interval);
-  }, [loadQueue, queueItems]); // re-trigger when queue changes (e.g. after enqueue)
+    const firstRun = setTimeout(runAutoPipeline, 3000);
+    const interval = setInterval(runAutoPipeline, 10000);
+    return () => { clearTimeout(firstRun); clearInterval(interval); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Carregar webhook raw quando item selecionado muda
   useEffect(() => {
@@ -124,6 +172,11 @@ const FileProcessingTab: React.FC = () => {
 
   const formatPhone = (phone: string): string => {
     if (!phone) return '-';
+    // Se parece email/sender de email, extrair só o email
+    if (phone.includes('@')) {
+      const match = phone.match(/<([^>]+)>/);
+      return match ? match[1] : phone.replace(/["']/g, '').trim();
+    }
     const cleaned = phone.replace(/\D/g, '');
     if (cleaned.length === 13) {
       return `+${cleaned.slice(0, 2)} ${cleaned.slice(2, 4)} ${cleaned.slice(4, 9)}-${cleaned.slice(9)}`;
@@ -152,66 +205,14 @@ const FileProcessingTab: React.FC = () => {
     });
   };
 
+  // Helper: chave única por webhook (composta para emails com múltiplos anexos)
+  const getWebhookKey = (w: MediaWebhook): string => {
+    return w.source === 'email' && w.attachmentIndex !== undefined
+      ? `${w.id}_att${w.attachmentIndex}`
+      : w.id;
+  };
+
   // Actions
-  const handleEnqueue = async (webhook: MediaWebhook) => {
-    setEnqueuingIds(prev => new Set(prev).add(webhook.id));
-    try {
-      const results = await fileProcessingService.enqueue(
-        [webhook.id],
-        webhook.source || 'umbler',
-        webhook.attachmentIndex
-      );
-      console.log('Enqueue result:', results);
-      await loadQueue();
-      setViewMode('queue');
-    } catch (err) {
-      console.error('Erro ao enfileirar:', err);
-      alert('Erro ao enfileirar: ' + (err instanceof Error ? err.message : 'Erro desconhecido'));
-    } finally {
-      setEnqueuingIds(prev => {
-        const next = new Set(prev);
-        next.delete(webhook.id);
-        return next;
-      });
-    }
-  };
-
-  const handleEnqueueAll = async () => {
-    const available = getAvailableWebhooks();
-    if (available.length === 0) return;
-
-    setEnqueuingIds(new Set(available.map(w => w.id)));
-    try {
-      // Agrupar por source para enviar em batches separados
-      const umblerIds = available.filter(w => (w.source || 'umbler') === 'umbler').map(w => w.id);
-      const emailItems = available.filter(w => w.source === 'email');
-
-      const allResults = [];
-      if (umblerIds.length > 0) {
-        const results = await fileProcessingService.enqueue(umblerIds, 'umbler');
-        allResults.push(...results);
-      }
-      // Emails precisam ser enfileirados individualmente por causa do attachmentIndex
-      for (const emailWebhook of emailItems) {
-        const results = await fileProcessingService.enqueue(
-          [emailWebhook.id],
-          'email',
-          emailWebhook.attachmentIndex
-        );
-        allResults.push(...results);
-      }
-
-      console.log('Enqueue all results:', allResults);
-      await loadQueue();
-      setViewMode('queue');
-    } catch (err) {
-      console.error('Erro ao enfileirar todos:', err);
-      alert('Erro ao enfileirar: ' + (err instanceof Error ? err.message : 'Erro desconhecido'));
-    } finally {
-      setEnqueuingIds(new Set());
-    }
-  };
-
   const handleRetry = async (itemId: string) => {
     try {
       await fileProcessingService.retryItem(itemId);
@@ -235,6 +236,26 @@ const FileProcessingTab: React.FC = () => {
       await loadQueue();
     } catch (err) {
       console.error('Erro ao remover da fila:', err);
+    }
+  };
+
+  const [clearingErrors, setClearingErrors] = useState(false);
+  const handleClearErrors = async () => {
+    const errorItems = queueItems.filter(i => i.status === 'error');
+    if (errorItems.length === 0) return;
+    setClearingErrors(true);
+    try {
+      for (const item of errorItems) {
+        await fileProcessingService.removeFromQueue(item.id);
+      }
+      if (selectedItem && errorItems.some(i => i.id === selectedItem.id)) {
+        setSelectedItem(null);
+      }
+      await loadQueue();
+    } catch (err) {
+      console.error('Erro ao limpar erros:', err);
+    } finally {
+      setClearingErrors(false);
     }
   };
 
@@ -340,23 +361,50 @@ const FileProcessingTab: React.FC = () => {
       {/* Header */}
       <div className="fp-header">
         <div className="fp-header-left">
-          <h2>Processamento de Arquivos</h2>
-          <div className="fp-stats">
-            <span className="fp-stat">Fila: {stats.queued}</span>
-            <span className="fp-stat">Processando: {stats.processing}</span>
-            <span className="fp-stat">Prontos: {stats.done}</span>
-            {stats.error > 0 && <span className="fp-stat">Erros: {stats.error}</span>}
-            <span className="fp-stat">Disponíveis: {stats.available}</span>
+          <div className="fp-header-row">
+            <h2>Processamento de Arquivos</h2>
+            <div className="fp-stats">
+              <span className="fp-stat">Fila: {stats.queued}</span>
+              <span className="fp-stat">Processando: {stats.processing}</span>
+              <span className="fp-stat">Prontos: {stats.done}</span>
+              {stats.error > 0 && <span className="fp-stat fp-stat-error">Erros: {stats.error}</span>}
+              <span className="fp-stat">Disponíveis: {stats.available}</span>
+            </div>
+          </div>
+          <div className="fp-pipeline-status">
+            {pipelineStatus.startsWith('enqueue:') && (
+              <span className="fp-pipeline-indicator enqueuing">
+                <span className="fp-pipeline-dot"></span>
+                Enfileirando {pipelineStatus.split(':')[1]} arquivo(s)...
+              </span>
+            )}
+            {pipelineStatus.startsWith('process:') && (
+              <span className="fp-pipeline-indicator processing">
+                <span className="fp-pipeline-dot"></span>
+                Processando arquivo #{pipelineStatus.split(':')[1]}...
+              </span>
+            )}
+            {pipelineStatus === 'idle' && (stats.queued > 0 || stats.processing > 0) && (
+              <span className="fp-pipeline-indicator waiting">
+                <span className="fp-pipeline-dot"></span>
+                Aguardando ciclo...
+              </span>
+            )}
+            {pipelineStatus === 'idle' && stats.queued === 0 && stats.processing === 0 && stats.available === 0 && stats.done > 0 && (
+              <span className="fp-pipeline-indicator done">
+                Tudo processado
+              </span>
+            )}
           </div>
         </div>
         <div className="fp-header-actions">
-          {viewMode === 'available' && stats.available > 0 && (
+          {viewMode === 'queue' && stats.error > 0 && (
             <button
-              className="fp-btn fp-btn-primary"
-              onClick={handleEnqueueAll}
-              disabled={enqueuingIds.size > 0}
+              className="fp-btn fp-btn-danger"
+              onClick={handleClearErrors}
+              disabled={clearingErrors}
             >
-              {enqueuingIds.size > 0 ? 'Enfileirando...' : `Enfileirar Todos (${stats.available})`}
+              {clearingErrors ? 'Limpando...' : `Limpar Erros (${stats.error})`}
             </button>
           )}
           <button
@@ -513,9 +561,11 @@ const FileProcessingTab: React.FC = () => {
               </>
             ) : (
               <>
-                {getFilteredWebhooks().map(webhook => (
+                {getFilteredWebhooks().map(webhook => {
+                  const wKey = getWebhookKey(webhook);
+                  return (
                   <div
-                    key={webhook.id}
+                    key={wKey}
                     className="fp-queue-card"
                   >
                     <div className={`fp-type-icon ${webhook.mediaType}`}>
@@ -535,23 +585,15 @@ const FileProcessingTab: React.FC = () => {
                       </div>
                     </div>
                     <div className="fp-card-right">
-                      <button
-                        className="fp-btn fp-btn-secondary"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleEnqueue(webhook);
-                        }}
-                        disabled={enqueuingIds.has(webhook.id)}
-                      >
-                        {enqueuingIds.has(webhook.id) ? '...' : 'Enfileirar'}
-                      </button>
+                      <span className="fp-status-badge queued">Aguardando</span>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
                 {getFilteredWebhooks().length === 0 && (
                   <div className="fp-empty">
-                    <p>Nenhum arquivo disponível</p>
-                    <p>Todos já foram enfileirados ou não há webhooks com mídia</p>
+                    <p>Nenhum arquivo pendente</p>
+                    <p>Todos já foram enfileirados automaticamente</p>
                   </div>
                 )}
               </>

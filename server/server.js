@@ -5,6 +5,7 @@ const express = require('express');
 const axios = require('axios');
 const FormData = require('form-data');
 const { PDFParse } = require('pdf-parse');
+const { getDocumentProxy, renderPageAsImage } = require('unpdf');
 const mammoth = require('mammoth');
 const WordExtractor = require('word-extractor');
 const admin = require('firebase-admin');
@@ -162,6 +163,290 @@ const getMessagesFromCache = async (phone, limit = 50) => {
   }
 
   return [];
+};
+
+// =====================================================
+// WEBHOOK MESSAGES — Parse e cache de umbler_webhooks
+// =====================================================
+
+/**
+ * Detecta a direção/source de uma mensagem a partir do webhook Umbler.
+ * Retorna 'Contact' (mensagem recebida do cliente) ou 'Member' (mensagem enviada pelo escritório).
+ *
+ * Heurísticas (verificadas em cascata):
+ *  1. Message.IsFromMe / LastMessage.IsFromMe (booleano direto)
+ *  2. Payload.Content.Message.IsFromMe (formato aninhado)
+ *  3. EventName contendo padrões como "message-received" vs "message-sent"
+ *  4. Presença de campo Trigger == "agent" ou "contact"
+ *  5. Fallback: 'Contact' (a maioria dos webhooks são mensagens recebidas)
+ */
+function detectSourceFromWebhook(data) {
+  const payload = data.Payload || {};
+  const content = payload.Content || {};
+  const message = content.Message || data.Message || {};
+  const lastMessage = content.LastMessage || data.LastMessage || {};
+
+  // 1. Campo IsFromMe direto na mensagem
+  if (typeof message.IsFromMe === 'boolean') {
+    return message.IsFromMe ? 'Member' : 'Contact';
+  }
+  if (typeof lastMessage.IsFromMe === 'boolean') {
+    return lastMessage.IsFromMe ? 'Member' : 'Contact';
+  }
+
+  // 2. IsFromMe no nível raiz do payload
+  if (typeof data.IsFromMe === 'boolean') {
+    return data.IsFromMe ? 'Member' : 'Contact';
+  }
+  if (typeof content.IsFromMe === 'boolean') {
+    return content.IsFromMe ? 'Member' : 'Contact';
+  }
+
+  // 3. EventName patterns
+  const eventName = (data.EventName || data.eventName || payload.EventName || '').toLowerCase();
+  if (eventName.includes('sent') || eventName.includes('outgoing') || eventName.includes('outbound')) {
+    return 'Member';
+  }
+  if (eventName.includes('received') || eventName.includes('incoming') || eventName.includes('inbound')) {
+    return 'Contact';
+  }
+
+  // 4. Trigger field
+  const trigger = (data.Trigger || data.trigger || '').toLowerCase();
+  if (trigger === 'agent' || trigger === 'member' || trigger === 'operator') {
+    return 'Member';
+  }
+  if (trigger === 'contact' || trigger === 'customer' || trigger === 'client') {
+    return 'Contact';
+  }
+
+  // 5. Direction field
+  const direction = data.Direction || data.direction || content.Direction || '';
+  if (typeof direction === 'string') {
+    const dirLower = direction.toLowerCase();
+    if (dirLower === 'out' || dirLower === 'outgoing' || dirLower === 'sent') return 'Member';
+    if (dirLower === 'in' || dirLower === 'incoming' || dirLower === 'received') return 'Contact';
+  }
+
+  // 6. Participant vs Contact — se Message.Participant existe e é diferente do Contact, é membro
+  const participant = message.Participant || lastMessage.Participant || '';
+  const contactPhone = (content.Contact || data.Contact || {}).PhoneNumber || '';
+  if (participant && contactPhone && participant !== contactPhone) {
+    return 'Member';
+  }
+
+  // Fallback: maioria dos webhooks são mensagens recebidas
+  return 'Contact';
+}
+
+/**
+ * Transforma um documento da collection umbler_webhooks no formato FirestoreMessage
+ * compatível com o frontend (mesmo formato do messagesCache).
+ */
+function parseUmblerWebhookToMessage(docId, data) {
+  const payload = data.Payload || {};
+  const content = payload.Content || {};
+  const message = content.Message || data.Message || {};
+  const lastMessage = content.LastMessage || data.LastMessage || {};
+  const contact = content.Contact || data.Contact || {};
+
+  const msgContent = message.Content || lastMessage.Content || '';
+  const messageType = message.MessageType || lastMessage.MessageType || 'Text';
+  const phoneNumber = (contact.PhoneNumber || '').replace(/\D/g, '');
+
+  const msgFile = message.File || {};
+  const lmFile = lastMessage.File || {};
+  const mediaUrl = msgFile.Url || lmFile.Url || '';
+  const isAudio = messageType === 'Audio';
+  const isImage = messageType === 'Image' || messageType === 'Video';
+
+  const timestamp = data._receivedAtISO
+    || (data._receivedAt?.toDate ? data._receivedAt.toDate().toISOString() : null)
+    || null;
+
+  const source = detectSourceFromWebhook(data);
+
+  return {
+    id: docId,
+    audio: isAudio,
+    chat_phone: phoneNumber,
+    content: isAudio ? '[Áudio]' : (isImage ? '[Imagem]' : msgContent),
+    image: isImage ? mediaUrl : '',
+    name: contact.Name || contact.DisplayName || '',
+    source,
+    timestamp,
+    _fromWebhook: true,
+  };
+}
+
+// Cache em memória para mensagens de webhook do Umbler
+const webhookMessagesCache = {
+  data: null,           // Map de phone variant -> messages[]
+  lastUpdate: null,
+  ttl: 60000,           // 1 minuto (mesmo padrão do messagesCache)
+  updating: false,
+};
+
+// Função para atualizar o cache de mensagens de webhook
+const updateWebhookMessagesCache = async () => {
+  if (!firestoreDb || webhookMessagesCache.updating) return;
+
+  webhookMessagesCache.updating = true;
+  try {
+    console.log('🔄 [webhook-cache] Atualizando cache de mensagens de webhook...');
+    const snapshot = await firestoreDb
+      .collection('umbler_webhooks')
+      .orderBy('_receivedAt', 'desc')
+      .limit(2000)
+      .get();
+
+    const phoneMap = new Map();
+
+    snapshot.docs.forEach(doc => {
+      const data = doc.data();
+      const parsed = parseUmblerWebhookToMessage(doc.id, data);
+
+      // Descartar webhooks sem conteúdo útil
+      if (!parsed.content && !parsed.audio && !parsed.image) return;
+      // Descartar se não tem telefone válido
+      if (!parsed.chat_phone || parsed.chat_phone.length < 8) return;
+
+      const rawPhone = parsed.chat_phone;
+
+      // Criar variantes do telefone para busca (mesma lógica do messagesCache)
+      const variants = [rawPhone];
+      if (rawPhone.startsWith('55') && rawPhone.length > 10) {
+        variants.push(rawPhone.substring(2));
+      }
+      if (!rawPhone.startsWith('55') && rawPhone.length >= 10) {
+        variants.push('55' + rawPhone);
+      }
+      const localNum = rawPhone.length >= 9 ? rawPhone.slice(-9) : rawPhone.slice(-8);
+      variants.push(localNum);
+
+      variants.forEach(variant => {
+        if (!phoneMap.has(variant)) {
+          phoneMap.set(variant, []);
+        }
+        const existing = phoneMap.get(variant);
+        if (!existing.find(m => m.id === parsed.id)) {
+          existing.push(parsed);
+        }
+      });
+    });
+
+    webhookMessagesCache.data = phoneMap;
+    webhookMessagesCache.lastUpdate = Date.now();
+    console.log(`✅ [webhook-cache] Cache atualizado: ${phoneMap.size} variantes de telefone`);
+  } catch (err) {
+    console.error('❌ [webhook-cache] Erro ao atualizar cache:', err.message);
+  } finally {
+    webhookMessagesCache.updating = false;
+  }
+};
+
+// Função para obter mensagens de webhook do cache
+const getWebhookMessagesFromCache = async (phone) => {
+  const normalizedPhone = String(phone).replace(/\D/g, '');
+
+  const cacheAge = Date.now() - (webhookMessagesCache.lastUpdate || 0);
+  if (!webhookMessagesCache.data || cacheAge > webhookMessagesCache.ttl) {
+    await updateWebhookMessagesCache();
+  }
+
+  if (!webhookMessagesCache.data) return [];
+
+  const variants = [normalizedPhone];
+  if (normalizedPhone.startsWith('55') && normalizedPhone.length > 10) {
+    variants.push(normalizedPhone.substring(2));
+  }
+  if (!normalizedPhone.startsWith('55') && normalizedPhone.length >= 10) {
+    variants.push('55' + normalizedPhone);
+  }
+  const localNum = normalizedPhone.length >= 9 ? normalizedPhone.slice(-9) : normalizedPhone.slice(-8);
+  variants.push(localNum);
+
+  for (const variant of variants) {
+    const messages = webhookMessagesCache.data.get(variant);
+    if (messages && messages.length > 0) {
+      return messages;
+    }
+  }
+
+  return [];
+};
+
+/**
+ * Mescla mensagens da collection `messages` (antigas) com mensagens de `umbler_webhooks`.
+ * Usa o timestamp mais antigo dos webhooks como cutoff: mensagens antigas antes desse cutoff
+ * são mantidas; a partir dele, usa apenas os webhooks.
+ * Deduplicação por conteúdo + timestamp próximo (<2s).
+ */
+const getMergedMessages = async (phone, limit = 50) => {
+  // Buscar ambas as fontes em paralelo
+  const [oldMessages, webhookMessages] = await Promise.all([
+    getMessagesFromCache(phone, 9999),
+    getWebhookMessagesFromCache(phone),
+  ]);
+
+  // Se não há webhooks, retornar mensagens antigas normalmente
+  if (!webhookMessages.length) {
+    return oldMessages.slice(0, limit);
+  }
+
+  // Se não há mensagens antigas, retornar webhooks ordenados
+  if (!oldMessages.length) {
+    const sorted = [...webhookMessages].sort((a, b) => {
+      const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+      const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+      return ta - tb;
+    });
+    return sorted.slice(-limit);
+  }
+
+  // Auto-detectar cutoff: timestamp mais antigo dos webhooks para este telefone
+  let oldestWebhookTs = Infinity;
+  for (const wm of webhookMessages) {
+    if (wm.timestamp) {
+      const ts = new Date(wm.timestamp).getTime();
+      if (ts < oldestWebhookTs) oldestWebhookTs = ts;
+    }
+  }
+
+  // Filtrar mensagens antigas: manter apenas as que são anteriores ao cutoff
+  const oldBeforeCutoff = oldestWebhookTs < Infinity
+    ? oldMessages.filter(m => {
+        if (!m.timestamp) return true; // manter msgs sem timestamp (seguro)
+        const ts = new Date(m.timestamp).getTime();
+        return ts < oldestWebhookTs;
+      })
+    : oldMessages;
+
+  // Concatenar e ordenar por timestamp crescente
+  const merged = [...oldBeforeCutoff, ...webhookMessages].sort((a, b) => {
+    const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+    const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+    return ta - tb;
+  });
+
+  // Deduplicação: remover msgs com mesmo conteúdo e timestamp próximo (<2s)
+  const deduplicated = [];
+  for (const msg of merged) {
+    const isDuplicate = deduplicated.some(existing => {
+      if (existing.content !== msg.content) return false;
+      if (!existing.timestamp || !msg.timestamp) return false;
+      const timeDiff = Math.abs(
+        new Date(existing.timestamp).getTime() - new Date(msg.timestamp).getTime()
+      );
+      return timeDiff < 2000;
+    });
+    if (!isDuplicate) {
+      deduplicated.push(msg);
+    }
+  }
+
+  // Retornar os últimos N registros
+  return deduplicated.slice(-limit);
 };
 
 const app = express();
@@ -539,10 +824,10 @@ app.get('/api/firestore/messages', requireAuth, requirePermission('conversas-lea
     const normalizedPhone = String(phone).replace(/\D/g, '');
     console.log(`📱 [server] Buscando mensagens para telefone: ${normalizedPhone}`);
 
-    // Usar cache para busca rápida
-    const messages = await getMessagesFromCache(normalizedPhone, limitParam);
+    // Usar cache mesclado: messages (antigos) + umbler_webhooks (novos)
+    const messages = await getMergedMessages(normalizedPhone, limitParam);
 
-    console.log(`✅ [server] Encontradas ${messages.length} mensagens para ${normalizedPhone} (cache)`);
+    console.log(`✅ [server] Encontradas ${messages.length} mensagens para ${normalizedPhone} (merged)`);
 
     return res.json({ messages, count: messages.length });
   } catch (err) {
@@ -1788,6 +2073,112 @@ app.get('/api/firestore/unique-phones', requireAuth, requirePermission('conversa
   }
 });
 
+// ─── GET /api/firestore/emails ─────────────────────────────────────────────────
+// Busca emails da collection email_webhooks do Firestore para um endereço de email
+app.get('/api/firestore/emails', requireAuth, requirePermission('conversas-leads'), async (req, res) => {
+  try {
+    if (!firestoreDb) {
+      return res.status(500).json({ error: 'Firebase não configurado no servidor' });
+    }
+
+    const email = req.query.email;
+    if (!email || typeof email !== 'string') {
+      return res.status(400).json({ error: 'Parâmetro "email" é obrigatório' });
+    }
+
+    const emailLower = email.toLowerCase().trim();
+    console.log(`📧 [server] Buscando emails no Firestore para: ${emailLower}`);
+
+    const emailsRef = firestoreDb.collection('email_webhooks');
+
+    // 2 queries paralelas: emails recebidos (destination) e enviados (sender)
+    const [destSnap, senderSnap] = await Promise.all([
+      emailsRef.where('destination', '==', emailLower).orderBy('_receivedAt', 'desc').limit(200).get(),
+      emailsRef.where('sender', '==', emailLower).orderBy('_receivedAt', 'desc').limit(200).get(),
+    ]);
+
+    // Merge e deduplicar por doc.id
+    const docsMap = new Map();
+    destSnap.docs.forEach(doc => docsMap.set(doc.id, { doc, matchField: 'destination' }));
+    senderSnap.docs.forEach(doc => {
+      if (!docsMap.has(doc.id)) {
+        docsMap.set(doc.id, { doc, matchField: 'sender' });
+      }
+    });
+
+    // Se poucos resultados, fazer scan mais amplo (sender pode ter formato "Nome <email>")
+    if (docsMap.size < 5) {
+      console.log(`📧 [server] Poucos resultados (${docsMap.size}), fazendo scan amplo...`);
+      const broadSnap = await emailsRef.orderBy('_receivedAt', 'desc').limit(500).get();
+      broadSnap.docs.forEach(doc => {
+        if (docsMap.has(doc.id)) return;
+        const data = doc.data();
+        const senderStr = (data.sender || '').toLowerCase();
+        const destStr = (data.destination || '').toLowerCase();
+        if (senderStr.includes(emailLower)) {
+          docsMap.set(doc.id, { doc, matchField: 'sender' });
+        } else if (destStr.includes(emailLower)) {
+          docsMap.set(doc.id, { doc, matchField: 'destination' });
+        }
+      });
+    }
+
+    console.log(`📧 [server] Total de emails encontrados: ${docsMap.size}`);
+
+    // Transformar para formato da UI
+    const emails = [];
+    for (const [docId, { doc, matchField }] of docsMap) {
+      const data = doc.data();
+
+      // Calcular timestamp
+      let timestamp = null;
+      if (data._receivedAtISO) {
+        timestamp = data._receivedAtISO;
+      } else if (data._receivedAt && typeof data._receivedAt.toDate === 'function') {
+        timestamp = data._receivedAt.toDate().toISOString();
+      } else if (data._receivedAt) {
+        timestamp = new Date(data._receivedAt).toISOString();
+      }
+
+      // Extrair anexos usando helper existente
+      const rawAttachments = extractEmailAttachments(data);
+      const attachments = rawAttachments.map(a => ({
+        url: a.url,
+        name: a.rawValue ? a.rawValue.split('/').pop() || `anexo_${a.index + 1}` : `anexo_${a.index + 1}`,
+      }));
+
+      // Determinar direction
+      const direction = matchField === 'sender' ? 'sent' : 'received';
+
+      emails.push({
+        id: docId,
+        subject: data.subject || '',
+        sender: data.sender || '',
+        destination: data.destination || '',
+        text: data.text || '',
+        timestamp,
+        attachments,
+        direction,
+      });
+    }
+
+    // Ordenar por timestamp desc
+    emails.sort((a, b) => {
+      const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+      const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+      return tb - ta;
+    });
+
+    return res.json({ emails, count: emails.length, source: 'firestore' });
+  } catch (err) {
+    console.error('❌ [server] Erro ao buscar emails do Firestore:', err);
+    return res.status(500).json({
+      error: 'Erro ao buscar emails do Firestore',
+      details: err.message,
+    });
+  }
+});
+
 /**
  * Cria um item (lead) em um board do Monday
  */
@@ -1980,6 +2371,62 @@ app.get('/api/umbler/webhooks', requireAuth, async (req, res) => {
   }
 });
 
+/**
+ * GET /api/umbler/webhooks/diagnose — Diagnóstico: mostra campos de direção dos webhooks
+ * Retorna 10 documentos com os campos relevantes para detectar incoming vs outgoing.
+ * ENDPOINT TEMPORÁRIO — remover após validação.
+ */
+app.get('/api/umbler/webhooks/diagnose', requireAuth, async (req, res) => {
+  try {
+    if (!firestoreDb) {
+      return res.status(500).json({ error: 'Firebase não configurado' });
+    }
+
+    const snapshot = await firestoreDb
+      .collection('umbler_webhooks')
+      .orderBy('_receivedAt', 'desc')
+      .limit(10)
+      .get();
+
+    const diagnosis = snapshot.docs.map(doc => {
+      const data = doc.data();
+      const payload = data.Payload || {};
+      const content = payload.Content || {};
+      const message = content.Message || data.Message || {};
+      const lastMessage = content.LastMessage || data.LastMessage || {};
+      const contact = content.Contact || data.Contact || {};
+
+      return {
+        docId: doc.id,
+        // Campos de direção candidatos
+        'Message.IsFromMe': message.IsFromMe,
+        'LastMessage.IsFromMe': lastMessage.IsFromMe,
+        'data.IsFromMe': data.IsFromMe,
+        'content.IsFromMe': content.IsFromMe,
+        'EventName': data.EventName || data.eventName || payload.EventName,
+        'Trigger': data.Trigger || data.trigger,
+        'Direction': data.Direction || data.direction || content.Direction,
+        'Message.Participant': message.Participant,
+        // Contexto
+        'Contact.PhoneNumber': contact.PhoneNumber,
+        'Contact.Name': contact.Name || contact.DisplayName,
+        'MessageType': message.MessageType || lastMessage.MessageType,
+        'MessageContent': (message.Content || lastMessage.Content || '').substring(0, 80),
+        // Source detectado pela heurística
+        detectedSource: detectSourceFromWebhook(data),
+        timestamp: data._receivedAtISO,
+        // Todas as top-level keys para referência
+        topLevelKeys: Object.keys(data).filter(k => !k.startsWith('_')),
+      };
+    });
+
+    return res.json({ diagnosis, count: diagnosis.length });
+  } catch (err) {
+    console.error('❌ [Diagnose] Erro:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // =====================================================
 // FILE PROCESSING — Processamento de Arquivos (Mídias)
 // =====================================================
@@ -2005,6 +2452,24 @@ function resolveEmailFileUrl(fileValue) {
   if (fileValue.startsWith('http://') || fileValue.startsWith('https://')) return fileValue;
   // Se parece com um Google Drive file ID, construir a URL de download direto
   return `https://drive.google.com/uc?export=download&id=${fileValue}`;
+}
+
+// Helper: Extrair anexos de email_webhooks
+// Emails armazenam anexos em campos individuais file_001..file_020 (URLs diretas ou template placeholders)
+function extractEmailAttachments(emailData) {
+  const attachments = [];
+  for (let i = 1; i <= 20; i++) {
+    const key = `file_${String(i).padStart(3, '0')}`;
+    const val = emailData[key];
+    if (!val || typeof val !== 'string') continue;
+    // Ignorar placeholders não resolvidos ($request.file.N.link$)
+    if (val.startsWith('$') || val.includes('$request.')) continue;
+    // Só aceitar URLs reais
+    const resolved = resolveEmailFileUrl(val);
+    if (!resolved) continue;
+    attachments.push({ index: i - 1, url: resolved, rawValue: val, fieldKey: key });
+  }
+  return attachments;
 }
 
 // Helper: OCR com Google Vision via FaaS (DigitalOcean serverless)
@@ -2080,10 +2545,80 @@ async function transcribeWithAssemblyAI(audioBuffer) {
   throw new Error('AssemblyAI: timeout aguardando transcrição');
 }
 
-// Helper: Extrair texto de PDF (pdf-parse + fallback Vision OCR via URL)
+// Helper: OCR de PDF escaneado — renderiza cada página como imagem, faz upload GCS e OCR individual
+async function ocrScannedPDFPages(pdfBuffer, webhookId) {
+  const scale = parseFloat(process.env.PDF_OCR_SCALE) || 2.0;
+  const concurrency = parseInt(process.env.PDF_OCR_CONCURRENCY) || 3;
+  const maxPages = parseInt(process.env.PDF_OCR_MAX_PAGES) || 20;
+
+  const pdfData = new Uint8Array(pdfBuffer);
+  const pdf = await getDocumentProxy(pdfData);
+  const totalPages = pdf.numPages;
+  const pagesToProcess = Math.min(totalPages, maxPages);
+
+  console.log(`📄 [PDF-OCR] PDF com ${totalPages} páginas, processando ${pagesToProcess} (scale=${scale}, concurrency=${concurrency})`);
+
+  const pageTexts = new Array(pagesToProcess).fill('');
+  let pagesOCRed = 0;
+
+  // Processar em lotes paralelos
+  for (let batchStart = 0; batchStart < pagesToProcess; batchStart += concurrency) {
+    const batchEnd = Math.min(batchStart + concurrency, pagesToProcess);
+    const batch = [];
+
+    for (let i = batchStart; i < batchEnd; i++) {
+      const pageNum = i + 1; // unpdf usa 1-indexed
+      batch.push(
+        (async () => {
+          try {
+            console.log(`📄 [PDF-OCR] Renderizando página ${pageNum}/${pagesToProcess}...`);
+            const canvasImport = require('@napi-rs/canvas');
+            const pngBuffer = await renderPageAsImage(pdf, pageNum, { scale, canvasImport });
+
+            // Upload para GCS
+            const gcsPath = `file-processing/pdf-pages/${webhookId}/page-${pageNum}.png`;
+            const gcsUrl = await uploadToGCS(Buffer.from(pngBuffer), gcsPath, 'image/png');
+            console.log(`☁️ [PDF-OCR] Página ${pageNum} salva: ${gcsUrl}`);
+
+            // OCR da imagem
+            const text = await ocrWithGoogleVision(gcsUrl);
+            if (text && text.trim().length > 0) {
+              pageTexts[i] = text.trim();
+              pagesOCRed++;
+              console.log(`✅ [PDF-OCR] Página ${pageNum}: ${text.trim().length} chars extraídos`);
+            } else {
+              console.log(`⚠️ [PDF-OCR] Página ${pageNum}: nenhum texto detectado`);
+            }
+          } catch (err) {
+            console.warn(`⚠️ [PDF-OCR] Erro na página ${pageNum}: ${err.message}`);
+          }
+        })()
+      );
+    }
+    await Promise.all(batch);
+  }
+
+  // Concatenar textos com separador de página
+  const combinedText = pageTexts
+    .map((text, i) => text ? `--- Página ${i + 1} ---\n${text}` : null)
+    .filter(Boolean)
+    .join('\n\n');
+
+  console.log(`📄 [PDF-OCR] Resultado: ${pagesOCRed}/${pagesToProcess} páginas com texto, ${combinedText.length} chars total`);
+
+  return {
+    text: combinedText,
+    method: 'google-vision-pdf-pages',
+    pageCount: pagesToProcess,
+    pagesOCRed,
+  };
+}
+
+// Helper: Extrair texto de PDF (pdf-parse + fallback OCR por página + fallback Vision via URL)
 // PDFs que são prints/scans retornam pouco texto via pdf-parse — threshold de 50 chars
-// Se pdf-parse retorna pouco, tenta OCR e usa o resultado mais longo
-async function extractTextFromPDF(pdfBuffer, mediaUrl) {
+// Fallback 1: OCR por página (renderiza cada página como imagem)
+// Fallback 2: Vision via URL original (legado)
+async function extractTextFromPDF(pdfBuffer, mediaUrl, webhookId) {
   let pdfText = '';
   try {
     const parser = new PDFParse({ data: pdfBuffer });
@@ -2099,15 +2634,33 @@ async function extractTextFromPDF(pdfBuffer, mediaUrl) {
     return { text: pdfText, method: 'pdf-parse' };
   }
 
-  // Pouco ou nenhum texto — provavelmente é um scan/print, tenta Vision OCR
-  console.log(`🔍 [FileProcessing] PDF com pouco texto (${pdfText.length} chars), tentando Vision OCR...`);
-  const ocrText = await ocrWithGoogleVision(mediaUrl);
+  // Pouco ou nenhum texto — provavelmente é um scan/print
+  console.log(`🔍 [FileProcessing] PDF com pouco texto (${pdfText.length} chars), tentando OCR por página...`);
 
-  // Usa o resultado mais longo entre pdf-parse e OCR
-  if (ocrText.trim().length > pdfText.length) {
-    return { text: ocrText, method: 'google-vision-pdf' };
+  // Fallback 1: OCR por página (renderiza cada página como imagem PNG e OCR individual)
+  if (webhookId) {
+    try {
+      const pageResult = await ocrScannedPDFPages(pdfBuffer, webhookId);
+      if (pageResult.text && pageResult.text.trim().length > pdfText.length) {
+        return pageResult;
+      }
+      console.log(`⚠️ [FileProcessing] OCR por página retornou pouco texto (${pageResult.text.length} chars), tentando Vision via URL...`);
+    } catch (err) {
+      console.warn(`⚠️ [FileProcessing] OCR por página falhou: ${err.message}, tentando Vision via URL...`);
+    }
   }
-  return { text: pdfText || ocrText, method: pdfText ? 'pdf-parse' : 'google-vision-pdf' };
+
+  // Fallback 2: Vision via URL original (legado)
+  try {
+    const ocrText = await ocrWithGoogleVision(mediaUrl);
+    if (ocrText.trim().length > pdfText.length) {
+      return { text: ocrText, method: 'google-vision-pdf' };
+    }
+  } catch (err) {
+    console.warn(`⚠️ [FileProcessing] Vision via URL falhou: ${err.message}`);
+  }
+
+  return { text: pdfText, method: pdfText ? 'pdf-parse' : 'none' };
 }
 
 // Helper: Extrair texto de DOCX (mammoth para .docx, word-extractor para .doc)
@@ -2172,20 +2725,15 @@ async function processQueueItem(itemId) {
     // Se mediaUrl vazio, tentar extrair do webhook original
     if (!mediaUrl) {
       if (webhookSource === 'email') {
-        // Para emails, extrair URL do campo images pelo attachmentIndex
-        let images = [];
-        try {
-          images = typeof whData.images === 'string' ? JSON.parse(whData.images) : (whData.images || []);
-        } catch (e) { /* ignore */ }
-
+        // Para emails, extrair URL dos campos file_001..file_020 pelo attachmentIndex
+        const attachments = extractEmailAttachments(whData);
         const idx = item.attachmentIndex || 0;
-        const img = images[idx] || {};
-        const rawRef = img.file || img.url || img.File || img.Url || '';
-        mediaUrl = resolveEmailFileUrl(rawRef);
+        const att = attachments.find(a => a.index === idx);
+        mediaUrl = att ? att.url : '';
 
         if (mediaUrl) {
           await queueRef.update({ mediaUrl });
-          console.log(`🔗 [FileProcessing] mediaUrl extraída do email (anexo ${idx}): ${mediaUrl}`);
+          console.log(`🔗 [FileProcessing] mediaUrl extraída do email (${att.fieldKey}): ${mediaUrl}`);
         }
       } else {
         // Para umbler, extrair de Message.File.Url ou LastMessage.File.Url
@@ -2258,7 +2806,7 @@ async function processQueueItem(itemId) {
       extractedText = await transcribeWithAssemblyAI(mediaBuffer);
       processingMethod = 'assemblyai';
     } else if (mediaType === 'pdf') {
-      const result = await extractTextFromPDF(mediaBuffer, mediaUrl);
+      const result = await extractTextFromPDF(mediaBuffer, mediaUrl, item.webhookId);
       extractedText = result.text;
       processingMethod = result.method;
     } else if (mediaType === 'docx') {
@@ -2322,7 +2870,7 @@ async function processQueueItem(itemId) {
  * GET /api/files/media-webhooks — Lista webhooks com mídia
  * Query: limit, type (image|audio|pdf)
  */
-app.get('/api/files/media-webhooks', requireAuth, requirePermission('file-processing'), async (req, res) => {
+app.get('/api/files/media-webhooks', async (req, res) => {
   try {
     if (!firestoreDb) {
       return res.status(500).json({ error: 'Firebase não configurado' });
@@ -2395,7 +2943,7 @@ app.get('/api/files/media-webhooks', requireAuth, requirePermission('file-proces
       if (mediaWebhooks.length >= limitParam) break;
     }
 
-    // ── Também buscar anexos em email_webhooks ──
+    // ── Também buscar anexos em email_webhooks (campos file_001..file_020) ──
     if (mediaWebhooks.length < limitParam) {
       const emailSnapshot = await firestoreDb
         .collection('email_webhooks')
@@ -2407,60 +2955,47 @@ app.get('/api/files/media-webhooks', requireAuth, requirePermission('file-proces
         if (mediaWebhooks.length >= limitParam) break;
 
         const eData = eDoc.data();
+        const attachments = extractEmailAttachments(eData);
 
-        // Parsear campo images (pode ser JSON string ou array)
-        let images = [];
-        try {
-          images = typeof eData.images === 'string' ? JSON.parse(eData.images) : (eData.images || []);
-        } catch (e) {
-          continue;
-        }
+        if (attachments.length === 0) continue;
 
-        if (!Array.isArray(images) || images.length === 0) continue;
+        const totalAttachments = attachments.length;
+        // Extrair nome legível do sender (ex: "João <joao@gmail.com>" -> "João")
+        const rawSender = eData.sender || eData.from || '';
+        const senderName = rawSender.replace(/<[^>]+>/, '').replace(/["']/g, '').trim() || rawSender;
 
-        for (let idx = 0; idx < images.length; idx++) {
+        for (const att of attachments) {
           if (mediaWebhooks.length >= limitParam) break;
 
-          const img = images[idx];
-          const rawFileRef = img.file || img.url || img.File || img.Url || '';
-          if (!rawFileRef) continue;
+          const eFileName = totalAttachments > 1
+            ? `Anexo ${att.index + 1}/${totalAttachments} - ${senderName}`
+            : `Anexo - ${senderName}`;
+          // Sem mime type disponível nos campos file_XXX, inferir como image por padrão
+          let eMimeType = '';
+          let eMediaType = 'image';
 
-          const eFileUrl = resolveEmailFileUrl(rawFileRef);
-          const eFileName = img.filename || img.name || img.FileName || img.OriginalName || `email_anexo_${idx}`;
-          let eMimeType = img.contentType || img.type || img.mime || img.ContentType || '';
-
-          // Inferir mediaType pelo mimeType ou extensão do filename
-          let eMediaType;
-          if (eMimeType) {
-            eMediaType = classifyMediaType(eMimeType);
-          } else {
-            const ext = (eFileName.split('.').pop() || '').toLowerCase();
-            if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tiff'].includes(ext)) { eMediaType = 'image'; eMimeType = `image/${ext === 'jpg' ? 'jpeg' : ext}`; }
-            else if (ext === 'pdf') { eMediaType = 'pdf'; eMimeType = 'application/pdf'; }
-            else if (['doc', 'docx'].includes(ext)) { eMediaType = 'docx'; eMimeType = ext === 'docx' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : 'application/msword'; }
-            else if (['mp3', 'wav', 'ogg', 'm4a', 'aac'].includes(ext)) { eMediaType = 'audio'; eMimeType = `audio/${ext}`; }
-            else { eMediaType = 'image'; }
-          }
+          // Tentar inferir pelo URL
+          const urlLower = att.url.toLowerCase();
+          if (urlLower.includes('.pdf')) { eMediaType = 'pdf'; eMimeType = 'application/pdf'; }
+          else if (urlLower.includes('.doc')) { eMediaType = 'docx'; eMimeType = 'application/msword'; }
+          else if (urlLower.includes('.mp3') || urlLower.includes('.wav') || urlLower.includes('.ogg')) { eMediaType = 'audio'; }
 
           if (typeFilter && eMediaType !== typeFilter) continue;
 
-          // Se o anexo já tem extracted_text no email, incluir
-          const preExtractedText = img.extracted_text || '';
-
           mediaWebhooks.push({
             id: eDoc.id,
-            attachmentIndex: idx,
-            from: eData.sender || eData.from || '',
-            mediaUrl: eFileUrl,
+            attachmentIndex: att.index,
+            from: rawSender,
+            mediaUrl: att.url,
             mediaFileName: eFileName,
             mediaMimeType: eMimeType,
             mediaType: eMediaType,
             receivedAt: eData._receivedAtISO || eData._receivedAt?.toDate?.()?.toISOString() || null,
             body: eData.subject || '',
-            hasUrl: !!eFileUrl,
+            hasUrl: true,
             thumbnailBase64: null,
             source: 'email',
-            preExtractedText,
+            totalAttachments,
           });
         }
       }
@@ -2478,7 +3013,7 @@ app.get('/api/files/media-webhooks', requireAuth, requirePermission('file-proces
  * GET /api/files/queue — Lista itens da fila de processamento
  * Query: status, type, limit
  */
-app.get('/api/files/queue', requireAuth, requirePermission('file-processing'), async (req, res) => {
+app.get('/api/files/queue', async (req, res) => {
   try {
     if (!firestoreDb) {
       return res.status(500).json({ error: 'Firebase não configurado' });
@@ -2519,7 +3054,7 @@ app.get('/api/files/queue', requireAuth, requirePermission('file-processing'), a
  * POST /api/files/enqueue — Adiciona webhooks na fila
  * Body: { webhookIds: string[], source?: 'umbler' | 'email', attachmentIndex?: number }
  */
-app.post('/api/files/enqueue', requireAuth, requirePermission('file-processing'), async (req, res) => {
+app.post('/api/files/enqueue', async (req, res) => {
   try {
     if (!firestoreDb) {
       return res.status(500).json({ error: 'Firebase não configurado' });
@@ -2548,96 +3083,75 @@ app.post('/api/files/enqueue', requireAuth, requirePermission('file-processing')
       const data = webhookDoc.data();
 
       if (webhookSource === 'email') {
-        // ── Fluxo para email_webhooks ──
-        let images = [];
-        try {
-          images = typeof data.images === 'string' ? JSON.parse(data.images) : (data.images || []);
-        } catch (e) {
-          results.push({ webhookId, error: 'Sem anexos válidos no email' });
-          continue;
-        }
+        // ── Fluxo para email_webhooks (campos file_001..file_020) ──
+        const attachments = extractEmailAttachments(data);
 
-        if (!Array.isArray(images) || images.length === 0) {
-          results.push({ webhookId, error: 'Email sem anexos' });
+        if (attachments.length === 0) {
+          results.push({ webhookId, error: 'Email sem anexos com URL válida' });
           continue;
         }
 
         // Se attachmentIndex especificado, processar só aquele; senão, todos
-        const indices = (attachmentIndex !== undefined && attachmentIndex !== null)
-          ? [attachmentIndex]
-          : images.map((_, i) => i);
+        const toProcess = (attachmentIndex !== undefined && attachmentIndex !== null)
+          ? attachments.filter(a => a.index === attachmentIndex)
+          : attachments;
 
-        for (const idx of indices) {
-          const img = images[idx];
-          if (!img) continue;
+        const totalAtt = attachments.length;
+        const rawSender = data.sender || data.from || '';
+        const senderName = rawSender.replace(/<[^>]+>/, '').replace(/["']/g, '').trim() || rawSender;
 
-          const rawFileRef = img.file || img.url || img.File || img.Url || '';
-          if (!rawFileRef) {
-            results.push({ webhookId, attachmentIndex: idx, error: 'Anexo sem URL' });
-            continue;
-          }
+        for (const att of toProcess) {
+          const eFileName = totalAtt > 1
+            ? `Anexo ${att.index + 1}/${totalAtt} - ${senderName}`
+            : `Anexo - ${senderName}`;
+          let eMimeType = '';
+          let eMediaType = 'image';
 
-          const eFileUrl = resolveEmailFileUrl(rawFileRef);
-          const eFileName = img.filename || img.name || img.FileName || img.OriginalName || `email_anexo_${idx}`;
-          let eMimeType = img.contentType || img.type || img.mime || img.ContentType || '';
-
-          let eMediaType;
-          if (eMimeType) {
-            eMediaType = classifyMediaType(eMimeType);
-          } else {
-            const ext = (eFileName.split('.').pop() || '').toLowerCase();
-            if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tiff'].includes(ext)) { eMediaType = 'image'; eMimeType = `image/${ext === 'jpg' ? 'jpeg' : ext}`; }
-            else if (ext === 'pdf') { eMediaType = 'pdf'; eMimeType = 'application/pdf'; }
-            else if (['doc', 'docx'].includes(ext)) { eMediaType = 'docx'; eMimeType = ext === 'docx' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : 'application/msword'; }
-            else if (['mp3', 'wav', 'ogg', 'm4a', 'aac'].includes(ext)) { eMediaType = 'audio'; eMimeType = `audio/${ext}`; }
-            else { eMediaType = 'image'; }
-          }
-
-          // Se o anexo já tem extracted_text no email, usar como fallback
-          const preExtractedText = img.extracted_text || '';
+          // Tentar inferir pelo URL
+          const urlLower = att.url.toLowerCase();
+          if (urlLower.includes('.pdf')) { eMediaType = 'pdf'; eMimeType = 'application/pdf'; }
+          else if (urlLower.includes('.doc')) { eMediaType = 'docx'; eMimeType = 'application/msword'; }
+          else if (urlLower.includes('.mp3') || urlLower.includes('.wav') || urlLower.includes('.ogg')) { eMediaType = 'audio'; }
 
           const existing = await firestoreDb
             .collection('file_processing_queue')
             .where('webhookId', '==', webhookId)
-            .where('attachmentIndex', '==', idx)
+            .where('attachmentIndex', '==', att.index)
             .limit(1)
             .get();
 
           if (!existing.empty) {
-            results.push({ webhookId, attachmentIndex: idx, error: 'Já está na fila', existingId: existing.docs[0].id });
+            results.push({ webhookId, attachmentIndex: att.index, error: 'Já está na fila', existingId: existing.docs[0].id });
             continue;
           }
-
-          // Se já tem texto extraído no email, marcar como done direto
-          const alreadyDone = preExtractedText.length > 10;
 
           const queueItem = {
             webhookId,
             webhookSource: 'email',
-            attachmentIndex: idx,
+            attachmentIndex: att.index,
             sourcePhone: data.sender || data.from || '',
-            mediaUrl: eFileUrl,
+            mediaUrl: att.url,
             mediaFileName: eFileName,
             mediaMimeType: eMimeType,
             mediaType: eMediaType,
             thumbnailBase64: null,
             receivedAt: data._receivedAtISO || (data._receivedAt?.toDate ? data._receivedAt.toDate().toISOString() : null),
-            status: alreadyDone ? 'done' : 'queued',
-            extractedText: preExtractedText || null,
+            status: 'queued',
+            extractedText: null,
             error: null,
-            processingMethod: alreadyDone ? 'email-pre-extracted' : null,
+            processingMethod: null,
             attempts: 0,
             maxAttempts: 3,
             lastAttemptAt: null,
             nextRetryAt: null,
             gcsUrl: null,
             gcsPath: null,
-            processedAt: alreadyDone ? new Date().toISOString() : null,
+            processedAt: null,
             createdAt: new Date().toISOString(),
           };
 
           const docRef = await firestoreDb.collection('file_processing_queue').add(queueItem);
-          results.push({ webhookId, attachmentIndex: idx, queueId: docRef.id, status: 'queued' });
+          results.push({ webhookId, attachmentIndex: att.index, queueId: docRef.id, status: 'queued' });
         }
       } else {
         // ── Fluxo original para umbler_webhooks ──
@@ -2723,7 +3237,7 @@ app.post('/api/files/enqueue', requireAuth, requirePermission('file-processing')
 /**
  * POST /api/files/process-next — Processa o próximo item da fila
  */
-app.post('/api/files/process-next', requireAuth, requirePermission('file-processing'), async (req, res) => {
+app.post('/api/files/process-next', async (req, res) => {
   try {
     if (!firestoreDb) {
       return res.status(500).json({ error: 'Firebase não configurado' });
@@ -2739,11 +3253,11 @@ app.post('/api/files/process-next', requireAuth, requirePermission('file-process
       .limit(50)
       .get();
 
-    // Ordenar por createdAt no servidor e filtrar por nextRetryAt
+    // Ordenar por receivedAt desc (mais recentes primeiro), filtrar por nextRetryAt
     const candidates = snapshot.docs
       .map(doc => ({ id: doc.id, ...doc.data() }))
       .filter(item => !item.nextRetryAt || item.nextRetryAt <= now)
-      .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+      .sort((a, b) => (b.receivedAt || b.createdAt || '').localeCompare(a.receivedAt || a.createdAt || ''));
 
     const nextItem = candidates.length > 0 ? candidates[0] : null;
 
@@ -2763,7 +3277,7 @@ app.post('/api/files/process-next', requireAuth, requirePermission('file-process
 /**
  * POST /api/files/process/:id — Processa um item específico da fila
  */
-app.post('/api/files/process/:id', requireAuth, requirePermission('file-processing'), async (req, res) => {
+app.post('/api/files/process/:id', async (req, res) => {
   try {
     const { id } = req.params;
     console.log(`⚙️ [FileProcessing] Processando item específico: ${id}`);
@@ -2778,7 +3292,7 @@ app.post('/api/files/process/:id', requireAuth, requirePermission('file-processi
 /**
  * GET /api/files/webhook-raw/:queueId — Retorna o webhook original completo + mediaUrl interpretada
  */
-app.get('/api/files/webhook-raw/:queueId', requireAuth, requirePermission('file-processing'), async (req, res) => {
+app.get('/api/files/webhook-raw/:queueId', async (req, res) => {
   try {
     if (!firestoreDb) {
       return res.status(500).json({ error: 'Firebase não configurado' });
@@ -2844,7 +3358,7 @@ app.get('/api/files/webhook-raw/:queueId', requireAuth, requirePermission('file-
 /**
  * POST /api/files/retry/:id — Reseta tentativas e recoloca na fila
  */
-app.post('/api/files/retry/:id', requireAuth, requirePermission('file-processing'), async (req, res) => {
+app.post('/api/files/retry/:id', async (req, res) => {
   try {
     if (!firestoreDb) {
       return res.status(500).json({ error: 'Firebase não configurado' });
@@ -2877,7 +3391,7 @@ app.post('/api/files/retry/:id', requireAuth, requirePermission('file-processing
 /**
  * DELETE /api/files/queue/:id — Remove um item da fila
  */
-app.delete('/api/files/queue/:id', requireAuth, requirePermission('file-processing'), async (req, res) => {
+app.delete('/api/files/queue/:id', async (req, res) => {
   try {
     if (!firestoreDb) {
       return res.status(500).json({ error: 'Firebase não configurado' });

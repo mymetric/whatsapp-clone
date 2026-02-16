@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { mondayService, MondayBoardItem, MondayColumn } from '../services/mondayService';
 import { indexedDBService } from '../services/indexedDBService';
 import { authService } from '../services/auth';
@@ -66,6 +66,9 @@ const ConversasLeadsTab: React.FC = () => {
   // Configuração de paginação (200 leads por board = 800 total inicial)
   const ITEMS_PER_BOARD = 200;
 
+  // Ref para controlar auto-load em background (evitar re-trigger)
+  const backgroundLoadRef = useRef(false);
+
   // Item selecionado (painel direito)
   const [selectedItem, setSelectedItem] = useState<MondayItemWithBoard | null>(null);
   const [selectedConversation, setSelectedConversation] = useState<MatchedConversation | null>(null);
@@ -84,71 +87,153 @@ const ConversasLeadsTab: React.FC = () => {
     // Função para extrair últimos 8-9 dígitos (número local sem DDD completo)
     const getLocalNumber = (phone: string): string => {
       const cleaned = phone.replace(/\D/g, '');
-      // Retorna os últimos 8 ou 9 dígitos (número local)
       return cleaned.length >= 9 ? cleaned.slice(-9) : cleaned.slice(-8);
     };
 
-    // Função local para buscar telefone de um item do Monday
-    const getPhoneFromItem = (item: MondayBoardItem): string | null => {
+    // [STEP 2] Extrair TODAS as colunas de telefone de cada item (não só a primeira)
+    const getAllPhonesFromItem = (item: MondayBoardItem): string[] => {
+      const phones: string[] = [];
       for (const col of item.column_values || []) {
         const colId = col.id?.toLowerCase() || '';
         const colTitle = columns.find(c => c.id === col.id)?.title?.toLowerCase() || '';
-
         if (phoneKeywords.some(kw => colId.includes(kw) || colTitle.includes(kw))) {
           if (col.text && col.text.trim()) {
-            return normalizePhone(col.text);
+            const normalized = normalizePhone(col.text);
+            if (normalized.length >= 8 && !phones.includes(normalized)) {
+              phones.push(normalized);
+            }
           }
         }
       }
-      return null;
+      return phones;
+    };
+
+    // [STEP 4] Gerar variantes do 9o dígito brasileiro
+    const get9thDigitVariants = (phone: string): string[] => {
+      const variants: string[] = [phone];
+      const cleaned = phone.replace(/\D/g, '');
+
+      // Formato com código de país: 55 + DDD(2) + número(8 ou 9)
+      if (cleaned.startsWith('55') && cleaned.length === 13) {
+        // 13 dígitos = 55 + DD + 9XXXXXXXX -> gerar sem o 9o dígito
+        const withoutNinth = cleaned.slice(0, 4) + cleaned.slice(5);
+        variants.push(withoutNinth);
+      } else if (cleaned.startsWith('55') && cleaned.length === 12) {
+        // 12 dígitos = 55 + DD + XXXXXXXX -> gerar com o 9o dígito
+        const withNinth = cleaned.slice(0, 4) + '9' + cleaned.slice(4);
+        variants.push(withNinth);
+      }
+
+      // Sem código de país: DDD(2) + número(8 ou 9)
+      if (!cleaned.startsWith('55')) {
+        if (cleaned.length === 11) {
+          // DD + 9XXXXXXXX -> DD + XXXXXXXX
+          const withoutNinth = cleaned.slice(0, 2) + cleaned.slice(3);
+          variants.push(withoutNinth);
+        } else if (cleaned.length === 10) {
+          // DD + XXXXXXXX -> DD + 9XXXXXXXX
+          const withNinth = cleaned.slice(0, 2) + '9' + cleaned.slice(2);
+          variants.push(withNinth);
+        }
+      }
+
+      return variants;
+    };
+
+    // [STEP 3] Map com array para suportar múltiplos itens por telefone
+    const mondayPhoneMap = new Map<string, MondayItemWithBoard[]>();
+
+    const addToPhoneMap = (key: string, item: MondayItemWithBoard) => {
+      const existing = mondayPhoneMap.get(key);
+      if (existing) {
+        if (!existing.some(e => e.id === item.id)) {
+          existing.push(item);
+        }
+      } else {
+        mondayPhoneMap.set(key, [item]);
+      }
     };
 
     const matched: MatchedConversation[] = [];
 
-    // Criar mapa de telefones do Monday para busca rápida (múltiplas chaves)
-    const mondayPhoneMap = new Map<string, MondayBoardItem>();
+    // Popular mapa com todos os telefones de todos os itens
     mondayItems.forEach(item => {
-      const phone = getPhoneFromItem(item);
-      if (phone && phone.length >= 8) {
-        // Adicionar telefone completo
-        mondayPhoneMap.set(phone, item);
-        // Adicionar sem código do país (55)
-        if (phone.startsWith('55') && phone.length > 10) {
-          mondayPhoneMap.set(phone.substring(2), item);
+      const phones = getAllPhonesFromItem(item);
+      const itemWithBoard = item as MondayItemWithBoard;
+
+      phones.forEach(phone => {
+        if (phone.length >= 8) {
+          // Gerar todas as variantes (com/sem 9o dígito)
+          const variants = get9thDigitVariants(phone);
+
+          variants.forEach(variant => {
+            // Telefone completo
+            addToPhoneMap(variant, itemWithBoard);
+            // Sem código do país (55)
+            if (variant.startsWith('55') && variant.length > 10) {
+              addToPhoneMap(variant.substring(2), itemWithBoard);
+            }
+            // Com código do país
+            if (!variant.startsWith('55') && variant.length >= 10) {
+              addToPhoneMap('55' + variant, itemWithBoard);
+            }
+            // Número local (últimos 8-9 dígitos)
+            const localNum = getLocalNumber(variant);
+            if (localNum.length >= 8) {
+              addToPhoneMap(localNum, itemWithBoard);
+            }
+          });
         }
-        // Adicionar com código do país
-        if (!phone.startsWith('55') && phone.length >= 10) {
-          mondayPhoneMap.set('55' + phone, item);
-        }
-        // Adicionar número local (últimos 8-9 dígitos)
-        const localNum = getLocalNumber(phone);
-        if (localNum.length >= 8) {
-          mondayPhoneMap.set(localNum, item);
-        }
-      }
+      });
     });
 
-    console.log('📱 Monday phones map:', mondayPhoneMap.size, 'entries');
+    console.log('📱 Monday phones map:', mondayPhoneMap.size, 'entries from', mondayItems.length, 'items');
 
-    // Para cada telefone do WhatsApp, verificar se existe no Monday
-    whatsappPhones.forEach(wp => {
-      const normalizedPhone = normalizePhone(wp.phone);
+    // Lookup: tentar todas as variantes do telefone do WhatsApp
+    const lookupPhone = (phone: string): MondayItemWithBoard | null => {
+      const normalizedPhone = normalizePhone(phone);
       const localNum = getLocalNumber(normalizedPhone);
 
-      let mondayItem = mondayPhoneMap.get(normalizedPhone);
+      // Gerar variantes do telefone do WhatsApp também
+      const whatsappVariants = get9thDigitVariants(normalizedPhone);
 
-      // Tentar variantes
-      if (!mondayItem && normalizedPhone.startsWith('55')) {
-        mondayItem = mondayPhoneMap.get(normalizedPhone.substring(2));
+      for (const variant of whatsappVariants) {
+        let items = mondayPhoneMap.get(variant);
+        if (items) return items[0];
+
+        // Tentar sem código do país
+        if (variant.startsWith('55')) {
+          items = mondayPhoneMap.get(variant.substring(2));
+          if (items) return items[0];
+        }
+        // Tentar com código do país
+        if (!variant.startsWith('55')) {
+          items = mondayPhoneMap.get('55' + variant);
+          if (items) return items[0];
+        }
       }
-      if (!mondayItem && !normalizedPhone.startsWith('55')) {
-        mondayItem = mondayPhoneMap.get('55' + normalizedPhone);
-      }
+
       // Tentar pelo número local
-      if (!mondayItem) {
-        mondayItem = mondayPhoneMap.get(localNum);
+      const items = mondayPhoneMap.get(localNum);
+      if (items) return items[0];
+
+      // Tentar variante local com/sem 9o dígito
+      if (localNum.length === 9) {
+        const without9 = localNum.slice(1);
+        const items8 = mondayPhoneMap.get(without9);
+        if (items8) return items8[0];
+      } else if (localNum.length === 8) {
+        const with9 = '9' + localNum;
+        const items9 = mondayPhoneMap.get(with9);
+        if (items9) return items9[0];
       }
 
+      return null;
+    };
+
+    // Para cada telefone do WhatsApp, buscar match no Monday
+    whatsappPhones.forEach(wp => {
+      const mondayItem = lookupPhone(wp.phone);
       matched.push({
         phone: wp.phone,
         whatsapp: wp,
@@ -157,8 +242,21 @@ const ConversasLeadsTab: React.FC = () => {
       });
     });
 
+    // [STEP 5] Logs de diagnóstico
     const matchedCount = matched.filter(m => m.status === 'matched').length;
-    console.log(`✅ Match result: ${matchedCount}/${matched.length} matched`);
+    const orphanCount = matched.filter(m => m.status === 'orphan').length;
+    console.log(`✅ Match result: ${matchedCount}/${matched.length} matched, ${orphanCount} orphans`);
+    console.log(`📊 Monday items: ${mondayItems.length}, Phone map entries: ${mondayPhoneMap.size}`);
+
+    if (orphanCount > 0) {
+      const orphans = matched.filter(m => m.status === 'orphan').slice(0, 10);
+      console.log('🔍 First 10 orphans:', orphans.map(o => ({
+        phone: o.phone,
+        normalized: normalizePhone(o.phone),
+        local: getLocalNumber(normalizePhone(o.phone)),
+        name: o.whatsapp.contactName,
+      })));
+    }
 
     setMatchedData(matched);
   }, [whatsappPhones, mondayItems, columns]);
@@ -255,18 +353,10 @@ const ConversasLeadsTab: React.FC = () => {
     console.log(`✅ Total de itens do Monday: ${allItems.length}${anyBoardHasMore ? ' (mais disponíveis)' : ''}`);
   };
 
-  // Carregar todos os itens restantes
-  const loadAllMondayItems = async () => {
-    setLoadingMore(true);
-    try {
-      await fetchMondayItems(true);
-    } finally {
-      setLoadingMore(false);
-    }
-  };
-
   // Carregar dados iniciais
   const loadData = useCallback(async (forceRefresh = false) => {
+    // Reset para permitir auto-load após refresh
+    backgroundLoadRef.current = false;
     let hasCache = false;
 
     if (!forceRefresh) {
@@ -401,6 +491,28 @@ const ConversasLeadsTab: React.FC = () => {
 
     return () => clearInterval(interval);
   }, [loadData]);
+
+  // Auto-carregar TODOS os itens em background após o load inicial
+  useEffect(() => {
+    if (!loading && !updating && hasMoreItems && mondayItems.length > 0 && !backgroundLoadRef.current) {
+      backgroundLoadRef.current = true;
+      setLoadingMore(true);
+      console.log('🔄 Auto-carregando todos os itens do Monday em background...');
+      const autoLoad = async () => {
+        try {
+          await fetchMondayItems(true);
+          console.log('✅ Auto-load completo — todos os itens carregados');
+        } catch (err) {
+          console.error('❌ Auto-load falhou:', err);
+          backgroundLoadRef.current = false; // Permitir retry
+        } finally {
+          setLoadingMore(false);
+        }
+      };
+      autoLoad();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, updating, hasMoreItems, mondayItems.length]);
 
   // Filtrar dados
   const getFilteredData = (): MatchedConversation[] => {
@@ -747,17 +859,10 @@ const ConversasLeadsTab: React.FC = () => {
                 <p>Nenhuma conversa encontrada</p>
               </div>
             )}
-            {hasMoreItems && (
+            {loadingMore && (
               <div className="load-more-container">
-                <button
-                  className="load-more-btn"
-                  onClick={loadAllMondayItems}
-                  disabled={loadingMore}
-                >
-                  {loadingMore ? 'Carregando...' : 'Carregar todos os leads'}
-                </button>
                 <span className="load-more-info">
-                  Exibindo apenas os {ITEMS_PER_BOARD} mais recentes por board
+                  Carregando todos os leads em segundo plano...
                 </span>
               </div>
             )}

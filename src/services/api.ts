@@ -207,9 +207,32 @@ export const messageService = {
 
 export const emailService = {
   async getEmailByEmail(email: string): Promise<any> {
+    // 1. Tentar buscar do Firestore (servidor) primeiro
     try {
-      console.log('🔍 Buscando email por email:', email);
-      console.log('📡 URL da requisição:', `https://n8n.rosenbaum.adv.br/webhook/api/emails?email=${encodeURIComponent(email)}`);
+      console.log('🔍 Buscando emails no Firestore para:', email);
+      const token = authService.getToken();
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const response = await fetch(`/api/firestore/emails?email=${encodeURIComponent(email)}`, { headers });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data && data.emails && data.emails.length > 0) {
+          console.log(`✅ Firestore retornou ${data.emails.length} emails`);
+          return { emails: data.emails, count: data.count, _source: 'firestore' };
+        }
+        console.log('ℹ️ Firestore retornou 0 emails, tentando fallback N8N...');
+      } else {
+        console.warn(`⚠️ Firestore respondeu ${response.status}, tentando fallback N8N...`);
+      }
+    } catch (firestoreErr) {
+      console.warn('⚠️ Erro ao buscar do Firestore, tentando fallback N8N:', firestoreErr);
+    }
+
+    // 2. Fallback: API N8N (emails históricos)
+    try {
+      console.log('📡 Fallback N8N para:', email);
       const apiBaseUrl = process.env.REACT_APP_API_BASE_URL || 'https://n8n.rosenbaum.adv.br/webhook/api';
       const apiKey = process.env.REACT_APP_API_KEY || 'YY2pHUzcGUFKBmZ';
       const response = await axios.get(`${apiBaseUrl}/emails?email=${encodeURIComponent(email)}`, {
@@ -217,17 +240,14 @@ export const emailService = {
           'apikey': apiKey
         }
       });
-      console.log('✅ Resposta da API de email:', response.data);
-      // A API retorna um objeto com destination e sender
       const data = response.data as any;
       if (data && data.destination && Array.isArray(data.destination) && data.destination.length > 0) {
-        console.log('📧 Emails encontrados:', data.destination.length);
-        return data; // Retorna a resposta completa da API
+        console.log('📧 N8N retornou emails:', data.destination.length);
+        return { ...data, _source: 'n8n' };
       }
       return undefined;
     } catch (error) {
-      console.error('❌ Erro ao buscar email:', error);
-      // Retorna undefined em caso de erro para não quebrar a aplicação
+      console.error('❌ Erro ao buscar email (N8N fallback):', error);
       return undefined;
     }
   },

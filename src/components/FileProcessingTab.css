@@ -17,7 +17,7 @@
   flex-shrink: 0;
 }
 
-.fp-header-left {
+.fp-header-left .fp-header-row {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -40,6 +40,84 @@
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+/* Pipeline status */
+.fp-header-left {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.fp-pipeline-status {
+  min-height: 18px;
+}
+
+.fp-pipeline-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 2px 10px;
+  border-radius: 10px;
+  animation: fp-fade-in 0.3s ease;
+}
+
+.fp-pipeline-indicator.enqueuing {
+  background: rgba(255, 193, 7, 0.25);
+  color: #fff3cd;
+}
+
+.fp-pipeline-indicator.processing {
+  background: rgba(0, 200, 83, 0.25);
+  color: #c8ffd4;
+}
+
+.fp-pipeline-indicator.waiting {
+  background: rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.fp-pipeline-indicator.done {
+  background: rgba(0, 200, 83, 0.2);
+  color: #a5d6a7;
+}
+
+.fp-pipeline-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  animation: fp-pulse 1.2s ease-in-out infinite;
+}
+
+.fp-pipeline-indicator.enqueuing .fp-pipeline-dot {
+  background: #ffc107;
+}
+
+.fp-pipeline-indicator.processing .fp-pipeline-dot {
+  background: #00c853;
+}
+
+.fp-pipeline-indicator.waiting .fp-pipeline-dot {
+  background: rgba(255, 255, 255, 0.5);
+  animation: fp-pulse 2s ease-in-out infinite;
+}
+
+@keyframes fp-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.7); }
+}
+
+@keyframes fp-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.fp-stat-error {
+  color: #ffcdd2;
+  font-weight: 600;
 }
 
 .fp-header-actions {

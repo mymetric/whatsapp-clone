@@ -1,1 +1,13 @@
-{ "functions": { "api/files/process-next.js": { "maxDuration": 300 }, "api/files/process/[id].js": { "maxDuration": 300 } } }
+{
+  "functions": {
+    "api/files/process-next.js": { "maxDuration": 300 },
+    "api/files/process/[id].js": { "maxDuration": 300 },
+    "api/cron/process-queue.js": { "maxDuration": 300 }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/process-queue",
+      "schedule": "* * * * *"
+    }
+  ]
+}

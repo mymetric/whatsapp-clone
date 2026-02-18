@@ -43,6 +43,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ selectedPhone, onMessagesChange
   const [status1Value, setStatus1Value] = useState('');
   const [status14Value, setStatus14Value] = useState('');
   const [status152Value, setStatus152Value] = useState('');
+  const allPromptsMapRef = useRef<Map<string, Prompt>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -438,6 +439,7 @@ ${conversationHistory}`;
       try {
         const allPrompts = await promptService.getPrompts();
         const promptMap = new Map(allPrompts.map(p => [p.id, p]));
+        allPromptsMapRef.current = promptMap;
 
         // IDs que são pai de alguém (não são folha)
         const parentIds = new Set(allPrompts.filter(p => p.parentId).map(p => p.parentId!));
@@ -1006,8 +1008,19 @@ ${conversationHistory}`;
       // Obter contexto do lead
       const leadContext = await getLeadContext();
 
-      // Preparar prompt para o Grok usando o prompt selecionado
-      const systemContext = `${prompt.content}
+      // Concatenar cadeia de prompts pais (avô → pai → filho)
+      const promptChain: string[] = [];
+      let current: Prompt | undefined = prompt;
+      while (current) {
+        if (current.content && current.content.trim()) {
+          promptChain.unshift(current.content.trim());
+        }
+        current = current.parentId ? allPromptsMapRef.current.get(current.parentId) : undefined;
+      }
+      const fullPromptContent = promptChain.join('\n\n');
+
+      // Preparar prompt para o Grok usando o prompt selecionado + pais
+      const systemContext = `${fullPromptContent}
 
 ${leadContext}
 

@@ -329,7 +329,6 @@ export const aiSuggestionService = {
 };
 
 // CRUD de prompts (coleção "prompts" no backend/messages - Firestore database "messages")
-const STORAGE_KEY = 'ai_prompts';
 
 export const promptService = {
   async getPrompts(): Promise<Prompt[]> {

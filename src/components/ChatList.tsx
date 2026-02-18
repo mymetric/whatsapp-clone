@@ -222,16 +222,14 @@ const ChatList: React.FC<ChatListProps> = ({
         </div>
       </div>
       <div className="chat-items">
-        {filteredPhones.length === 0 && (searchTerm || filterBoard || filterEtiqueta || filterStatus) ? (
+        {filteredPhones.length === 0 ? (
           <div className="no-results">
-            <p>Nenhuma conversa encontrada com os filtros aplicados</p>
+            <p>{(searchTerm || filterBoard || filterEtiqueta || filterStatus)
+              ? 'Nenhuma conversa encontrada com os filtros aplicados'
+              : 'Nenhuma conversa disponível'}</p>
           </div>
         ) : (
           filteredPhones.map((phone) => {
-            // Debug: Verificar se o phone tem pulse_id e board_id
-            const hasMondayData = phone.pulse_id && phone.board_id;
-            console.log(`Phone ${phone._id}: pulse_id=${phone.pulse_id}, board_id=${phone.board_id}, hasMondayData=${hasMondayData}`);
-            
             return (
             <div
               key={phone._id || 'unknown'}

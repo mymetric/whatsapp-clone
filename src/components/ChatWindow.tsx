@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Phone, Message } from '../types';
-import { messageService as apiMessageService, emailService, promptService, Prompt } from '../services/api';
+import { messageService as apiMessageService, emailService, promptService, documentService, Prompt } from '../services/api';
 import { messageService } from '../services/messageService';
 import { grokService } from '../services/grokService';
 import { firestoreRestPhoneAIService } from '../services/firestoreRestService';
@@ -834,77 +834,167 @@ ${conversationHistory}`;
   const getLeadContext = async (): Promise<string> => {
     if (!selectedPhone) return '';
 
-    let context = `Dados do Lead:\n`;
-    context += `- Nome: ${selectedPhone.lead_name || 'Não informado'}\n`;
-    context += `- Telefone: ${selectedPhone._id}\n`;
-    context += `- Email: ${selectedPhone.email || 'Não informado'}\n`;
-    context += `- Status: ${selectedPhone.status || 'Não informado'}\n`;
-    context += `- Etiqueta: ${selectedPhone.etiqueta || 'Não informado'}\n`;
-    
-    if (selectedPhone.board) {
-      context += `- Board Monday.com: ${selectedPhone.board}\n`;
-    }
-    if (selectedPhone.pulse_id) {
-      context += `- Pulse ID: ${selectedPhone.pulse_id}\n`;
-    }
+    const MAX_CONTEXT_CHARS = 100000; // ~25K tokens — usar boa parte da janela do Grok
+    const sections: string[] = [];
 
-    // Adicionar últimas mensagens da conversa
+    // 1. Dados do Lead
+    let leadInfo = `## Dados do Lead\n`;
+    leadInfo += `- Nome: ${selectedPhone.lead_name || 'Não informado'}\n`;
+    leadInfo += `- Telefone: ${selectedPhone._id}\n`;
+    leadInfo += `- Email: ${selectedPhone.email || 'Não informado'}\n`;
+    leadInfo += `- Status: ${selectedPhone.status || 'Não informado'}\n`;
+    leadInfo += `- Etiqueta: ${selectedPhone.etiqueta || 'Não informado'}\n`;
+    if (selectedPhone.board) leadInfo += `- Board Monday.com: ${selectedPhone.board}\n`;
+    if (selectedPhone.pulse_id) leadInfo += `- Pulse ID: ${selectedPhone.pulse_id}\n`;
+    sections.push(leadInfo);
+
+    // Buscar tudo em paralelo para performance
+    const [emailData, processedFiles, mondayData, documents, documentAnalysis] = await Promise.all([
+      emailService.getEmailForContact(selectedPhone).catch(() => null),
+      fetch(`/api/files/extracted-texts?phone=${encodeURIComponent(selectedPhone._id)}`)
+        .then(r => r.ok ? r.json() : []).catch(() => []),
+      mondayService.getMondayUpdates(selectedPhone._id).catch(() => null),
+      documentService.getDocumentsForContact(selectedPhone).catch(() => []),
+      selectedPhone.pulse_id
+        ? documentService.getDocumentAnalysis(selectedPhone.pulse_id).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+
+    // 2. Histórico COMPLETO de mensagens WhatsApp
     if (messages.length > 0) {
-      context += `\nÚltimas mensagens da conversa:\n`;
-      const recentMessages = messages.slice(-10);
-      recentMessages.forEach((msg, idx) => {
-        const sender = msg.source === 'Member' ? 'Você' : 'Cliente';
-        const time = new Date(msg._updateTime).toLocaleString('pt-BR');
-        context += `${idx + 1}. [${time}] ${sender}: ${msg.content}\n`;
+      let msgSection = `\n## Histórico de Conversa WhatsApp (${messages.length} mensagens)\n`;
+      messages.forEach((msg, idx) => {
+        const sender = msg.source === 'Member' ? 'Atendente' : 'Cliente';
+        const time = msg._updateTime ? new Date(msg._updateTime).toLocaleString('pt-BR') : '';
+        const content = msg.content || '';
+        msgSection += `${idx + 1}. [${time}] ${sender}: ${content}\n`;
       });
+      sections.push(msgSection);
     }
 
-    // Tentar buscar emails do contato
-    try {
-      const emailData = await emailService.getEmailForContact(selectedPhone);
-      if (emailData && typeof emailData === 'object') {
-        const data = emailData as any;
-        const emails: any[] = [];
+    // 3. Updates do Monday
+    if (mondayData && mondayData.monday_updates) {
+      const items = mondayData.monday_updates.items || [];
+      if (items.length > 0) {
+        const mondayParts: string[] = [`\n## Dados do Monday.com\n`];
 
-        if (Array.isArray(data.destination)) {
-          emails.push(...data.destination.filter((e: any) => e && Object.keys(e).length > 0));
-        }
-        if (Array.isArray(data.sender)) {
-          emails.push(...data.sender.filter((e: any) => e && Object.keys(e).length > 0));
-        }
+        items.forEach(item => {
+          mondayParts.push(`\n### Item: ${item.name || 'Sem nome'}\n`);
 
-        if (emails.length > 0) {
-          context += `\nEmails trocados (${emails.length} encontrados):\n`;
-          emails.slice(0, 5).forEach((email, idx) => {
-            context += `${idx + 1}. Assunto: ${email.subject || 'Sem assunto'}\n`;
-            if (email.text) {
-              context += `   Preview: ${email.text.substring(0, 100)}...\n`;
+          // Updates/comentários do item
+          if (item.updates && item.updates.length > 0) {
+            mondayParts.push(`Updates (${item.updates.length}):\n`);
+            item.updates.forEach((upd, idx) => {
+              const creator = upd.creator?.name || 'Desconhecido';
+              const date = upd.created_at ? new Date(upd.created_at).toLocaleString('pt-BR') : '';
+              const body = (upd.body || '').replace(/<[^>]+>/g, '').trim();
+              if (body) {
+                mondayParts.push(`${idx + 1}. [${date}] ${creator}: ${body}\n`);
+              }
+            });
+          }
+        });
+        sections.push(mondayParts.join(''));
+      }
+    }
+
+    // 4. Análise de Documentos do Monday (se existir)
+    if (documentAnalysis) {
+      let analysisSection = `\n## Análise de Documentos\n`;
+      if (documentAnalysis.checklist) {
+        analysisSection += `### Checklist:\n${documentAnalysis.checklist}\n`;
+      }
+      if (documentAnalysis.analise) {
+        analysisSection += `### Análise:\n${documentAnalysis.analise}\n`;
+      }
+      sections.push(analysisSection);
+    }
+
+    // 5. Emails completos
+    if (emailData && typeof emailData === 'object') {
+      const data = emailData as any;
+      const allEmails: any[] = [];
+      if (Array.isArray(data.destination)) {
+        allEmails.push(...data.destination.filter((e: any) => e && Object.keys(e).length > 0));
+      }
+      if (Array.isArray(data.sender)) {
+        allEmails.push(...data.sender.filter((e: any) => e && Object.keys(e).length > 0));
+      }
+
+      if (allEmails.length > 0) {
+        let emailSection = `\n## Emails (${allEmails.length} encontrados)\n`;
+        allEmails.forEach((email, idx) => {
+          emailSection += `\n### Email ${idx + 1}: ${email.subject || 'Sem assunto'}\n`;
+          if (email.from) emailSection += `De: ${email.from}\n`;
+          if (email.to) emailSection += `Para: ${email.to}\n`;
+          if (email.date) emailSection += `Data: ${email.date}\n`;
+          if (email.text) {
+            emailSection += `Conteúdo:\n${email.text}\n`;
+          }
+        });
+        sections.push(emailSection);
+      }
+    }
+
+    // 6. Documentos (email/telefone)
+    if (documents.length > 0) {
+      let docSection = `\n## Documentos do Lead (${documents.length})\n`;
+      documents.forEach((doc, idx) => {
+        const origin = doc.origin === 'email' ? 'Email' : 'Telefone';
+        const direction = doc.direction === 'sent' ? 'Enviado' : 'Recebido';
+        docSection += `\n### Documento ${idx + 1} (${origin} - ${direction})\n`;
+        if (doc.metadata?.subject) docSection += `Assunto: ${doc.metadata.subject}\n`;
+        if (doc.text) docSection += `Conteúdo:\n${doc.text}\n`;
+        if (doc.images && doc.images.length > 0) {
+          doc.images.forEach((img, imgIdx) => {
+            if (img.extractedText) {
+              docSection += `Anexo ${imgIdx + 1} (transcrição): ${img.extractedText}\n`;
             }
           });
         }
-      }
-    } catch (error) {
-      console.log('Não foi possível carregar emails para o contexto');
+      });
+      sections.push(docSection);
     }
 
-    // Buscar textos extraídos de arquivos processados (PDFs, imagens, docs)
-    try {
-      const res = await fetch(`/api/files/extracted-texts?phone=${encodeURIComponent(selectedPhone._id)}`);
-      const files = await res.json();
-      if (Array.isArray(files) && files.length > 0) {
-        context += `\nDocumentos do contato (${files.length} arquivo(s) processado(s)):\n`;
-        files.forEach((f: any, idx: number) => {
-          const text = f.extractedText.length > 500
-            ? f.extractedText.substring(0, 500) + '...[truncado]'
-            : f.extractedText;
-          context += `\n--- Documento ${idx + 1}: ${f.fileName || 'sem nome'} (${f.mediaType}) ---\n${text}\n`;
-        });
-      }
-    } catch (error) {
-      console.log('Não foi possível carregar textos de arquivos processados');
+    // 7. Arquivos processados (file_processing_queue) — textos completos
+    if (Array.isArray(processedFiles) && processedFiles.length > 0) {
+      let fileSection = `\n## Arquivos Processados (${processedFiles.length})\n`;
+      processedFiles.forEach((f: any, idx: number) => {
+        fileSection += `\n### Arquivo ${idx + 1}: ${f.fileName || 'sem nome'} (${f.mediaType})\n`;
+        fileSection += `${f.extractedText}\n`;
+      });
+      sections.push(fileSection);
     }
 
-    return context;
+    // Juntar tudo
+    let fullContext = sections.join('\n');
+
+    // Compactar se exceder o limite: truncar seções maiores proporcionalmente
+    if (fullContext.length > MAX_CONTEXT_CHARS) {
+      // Prioridade: lead info > mensagens > monday > análise > emails > docs > arquivos
+      // Truncar as seções de trás pra frente (menos prioritárias primeiro)
+      const overBy = fullContext.length - MAX_CONTEXT_CHARS;
+      let toTrim = overBy;
+
+      // Tentar truncar a partir da última seção
+      for (let i = sections.length - 1; i >= 1 && toTrim > 0; i--) {
+        const sectionLen = sections[i].length;
+        if (sectionLen > 500 && toTrim > 0) {
+          const trimTo = Math.max(500, sectionLen - toTrim);
+          const trimmed = sections[i].substring(0, trimTo) + '\n...[contexto compactado por limite]\n';
+          toTrim -= (sectionLen - trimmed.length);
+          sections[i] = trimmed;
+        }
+      }
+      fullContext = sections.join('\n');
+
+      // Se ainda excede, corte duro
+      if (fullContext.length > MAX_CONTEXT_CHARS) {
+        fullContext = fullContext.substring(0, MAX_CONTEXT_CHARS) + '\n...[contexto truncado]';
+      }
+    }
+
+    return fullContext;
   };
 
 

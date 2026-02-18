@@ -549,9 +549,9 @@ const ConversasLeadsTab: React.FC = () => {
     if (searchTerm.trim()) {
       const term = searchTerm.toLowerCase();
       filtered = filtered.filter(d => {
-        const phoneMatch = d.phone.includes(term);
-        const nameMatch = d.whatsapp.contactName?.toLowerCase().includes(term);
-        const mondayNameMatch = d.monday?.name?.toLowerCase().includes(term);
+        const phoneMatch = (d.phone || '').includes(term);
+        const nameMatch = (typeof d.whatsapp?.contactName === 'string' ? d.whatsapp.contactName : '').toLowerCase().includes(term);
+        const mondayNameMatch = (typeof d.monday?.name === 'string' ? d.monday.name : '').toLowerCase().includes(term);
         return phoneMatch || nameMatch || mondayNameMatch;
       });
     }

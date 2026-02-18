@@ -126,6 +126,25 @@ const AdminPanel: React.FC = () => {
     }
   };
 
+  const resetPassword = async (email: string) => {
+    const newPwd = window.prompt(`Nova senha para ${email}:`);
+    if (!newPwd || !newPwd.trim()) return;
+
+    try {
+      const res = await apiFetch(`/api/users/${encodeURIComponent(email)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ password: newPwd.trim() }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Erro ao resetar senha');
+      }
+      showMessage('success', `Senha de ${email} atualizada`);
+    } catch (err: any) {
+      showMessage('error', err.message);
+    }
+  };
+
   const deleteUser = async (email: string) => {
     if (!window.confirm(`Tem certeza que deseja deletar o usuário ${email}?`)) return;
 
@@ -281,6 +300,12 @@ const AdminPanel: React.FC = () => {
                             {user.saving ? 'Salvando...' : 'Salvar'}
                           </button>
                         )}
+                        <button
+                          className="admin-btn admin-btn-secondary"
+                          onClick={() => resetPassword(user.email)}
+                        >
+                          Resetar Senha
+                        </button>
                         <button
                           className="admin-btn admin-btn-danger"
                           onClick={() => deleteUser(user.email)}

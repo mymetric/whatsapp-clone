@@ -19,6 +19,18 @@ interface GrokResponse {
 class GrokService {
   private baseUrl = '/api/grok/chat';
 
+  private getAuthHeaders(): Record<string, string> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    try {
+      const sessionStr = localStorage.getItem('auth_session');
+      if (sessionStr) {
+        const session = JSON.parse(sessionStr);
+        if (session.token) headers['Authorization'] = `Bearer ${session.token}`;
+      }
+    } catch { /* ignore */ }
+    return headers;
+  }
+
   async generateResponse(
     userPrompt: string, 
     context?: {
@@ -105,13 +117,11 @@ Instruções:
 
       const response = await fetch(this.baseUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: this.getAuthHeaders(),
         body: JSON.stringify({
           model: 'grok-4-fast',
           messages: messages,
-          max_tokens: context?.systemPrompt ? 40000 : 1000, // Mais tokens para o copiloto
+          max_tokens: context?.systemPrompt ? 40000 : 1000,
           temperature: 0.7,
         })
       });
@@ -215,9 +225,7 @@ Instruções:
 
       const response = await fetch(this.baseUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: this.getAuthHeaders(),
         body: JSON.stringify({
           model: 'grok-4-fast',
           messages,

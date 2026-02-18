@@ -452,9 +452,45 @@ const getMergedMessages = async (phone, limit = 50) => {
 const app = express();
 const PORT = process.env.PORT || 4000;
 
+// =====================================================
+// SSE + Polling — Event stream para processamento em tempo real
+// =====================================================
+const sseClients = new Set();
+const recentEvents = []; // buffer circular de eventos recentes
+let eventSeq = 0;
+
+function emitSSE(event, data) {
+  const entry = { seq: ++eventSeq, event, ...data, timestamp: new Date().toISOString() };
+  recentEvents.push(entry);
+  if (recentEvents.length > 200) recentEvents.splice(0, recentEvents.length - 200);
+  const payload = `event: ${event}\ndata: ${JSON.stringify(entry)}\n\n`;
+  for (const res of sseClients) {
+    res.write(payload);
+  }
+}
+
 // Middleware para JSON com limite aumentado para suportar arquivos base64
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// SSE endpoint — stream de eventos de processamento
+app.get('/api/files/events', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+  res.write('event: connected\ndata: {}\n\n');
+  sseClients.add(res);
+  req.on('close', () => sseClients.delete(res));
+});
+
+// Polling endpoint — retorna eventos após um dado seq
+app.get('/api/files/recent-events', (req, res) => {
+  const afterSeq = parseInt(req.query.after) || 0;
+  const events = recentEvents.filter(e => e.seq > afterSeq);
+  res.json({ events, lastSeq: eventSeq });
+});
 
 // =====================================================
 // AUTH — Middleware de autenticação e permissões
@@ -2472,36 +2508,53 @@ function extractEmailAttachments(emailData) {
   return attachments;
 }
 
-// Helper: OCR com Google Vision via FaaS (DigitalOcean serverless)
-// Recebe a URL da imagem diretamente — sem necessidade de baixar/base64
-const VISION_FAAS_URL = 'https://faas-nyc1-2ef2e6cc.doserverless.co/api/v1/namespaces/fn-40f71f3b-ef29-4735-b9b7-94774d6c5fa7/actions/google_vision';
-const VISION_FAAS_AUTH = 'Basic NTUxZDA1YmMtN2YzMy00MzgyLWFjZjktOWMxZDk5ZGE4MGFkOjM5VFl5N1lHNHNHSW1Rek42QXZLQkVnMkRkQTVjMjBKRlY4c1h2RndUSGpIVUJUdmlUMG5MalJ1SjRuSUNBZ0Y=';
+// Helper: OCR com Google Cloud Vision API (chamada direta via REST + service account)
+const { GoogleAuth } = require('google-auth-library');
+
+let _visionAuthClient = null;
+async function getVisionAuthClient() {
+  if (_visionAuthClient) return _visionAuthClient;
+  const privateKey = (process.env.FIREBASE_PRIVATE_KEY || process.env.REACT_APP_FIREBASE_PRIVATE_KEY || '')
+    .replace(/^["']|["']$/g, '')
+    .replace(/\\n/g, '\n');
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL || process.env.REACT_APP_FIREBASE_CLIENT_EMAIL;
+  const auth = new GoogleAuth({
+    credentials: { client_email: clientEmail, private_key: privateKey },
+    scopes: ['https://www.googleapis.com/auth/cloud-vision'],
+  });
+  _visionAuthClient = await auth.getClient();
+  return _visionAuthClient;
+}
 
 async function ocrWithGoogleVision(mediaUrl) {
-  console.log(`🔍 [Vision FaaS] Enviando URL para OCR: ${mediaUrl}`);
+  console.log(`🔍 [Vision API] Enviando URL para OCR: ${mediaUrl}`);
+  const client = await getVisionAuthClient();
+  const accessToken = (await client.getAccessToken()).token;
+
   const response = await axios.post(
-    `${VISION_FAAS_URL}?blocking=true&result=true`,
-    { url: mediaUrl },
+    'https://vision.googleapis.com/v1/images:annotate',
+    {
+      requests: [{
+        image: { source: { imageUri: mediaUrl } },
+        features: [{ type: 'TEXT_DETECTION' }],
+      }],
+    },
     {
       headers: {
         'Content-Type': 'application/json',
-        Authorization: VISION_FAAS_AUTH,
+        Authorization: `Bearer ${accessToken}`,
       },
       timeout: 60000,
     }
   );
 
-  // Resposta: response.data.body é JSON string com formato da Vision API
-  const rawBody = response.data?.body || response.data;
-  const parsed = typeof rawBody === 'string' ? JSON.parse(rawBody) : rawBody;
-
-  const annotations = parsed?.responses?.[0]?.textAnnotations;
+  const annotations = response.data?.responses?.[0]?.textAnnotations;
   if (!annotations || annotations.length === 0) {
-    console.log('🔍 [Vision FaaS] Nenhum texto detectado na imagem');
+    console.log('🔍 [Vision API] Nenhum texto detectado na imagem');
     return '';
   }
   const text = annotations[0].description || '';
-  console.log(`✅ [Vision FaaS] Texto extraído: ${text.length} caracteres`);
+  console.log(`✅ [Vision API] Texto extraído: ${text.length} caracteres`);
   return text;
 }
 
@@ -2556,41 +2609,29 @@ async function ocrScannedPDFPages(pdfBuffer, webhookId) {
   const totalPages = pdf.numPages;
   const pagesToProcess = Math.min(totalPages, maxPages);
 
-  console.log(`📄 [PDF-OCR] PDF com ${totalPages} páginas, processando ${pagesToProcess} (scale=${scale}, concurrency=${concurrency})`);
-
   const pageTexts = new Array(pagesToProcess).fill('');
   let pagesOCRed = 0;
 
-  // Processar em lotes paralelos
   for (let batchStart = 0; batchStart < pagesToProcess; batchStart += concurrency) {
     const batchEnd = Math.min(batchStart + concurrency, pagesToProcess);
     const batch = [];
 
     for (let i = batchStart; i < batchEnd; i++) {
-      const pageNum = i + 1; // unpdf usa 1-indexed
+      const pageNum = i + 1;
       batch.push(
         (async () => {
           try {
-            console.log(`📄 [PDF-OCR] Renderizando página ${pageNum}/${pagesToProcess}...`);
             const canvasImport = require('@napi-rs/canvas');
             const pngBuffer = await renderPageAsImage(pdf, pageNum, { scale, canvasImport });
-
-            // Upload para GCS
             const gcsPath = `file-processing/pdf-pages/${webhookId}/page-${pageNum}.png`;
             const gcsUrl = await uploadToGCS(Buffer.from(pngBuffer), gcsPath, 'image/png');
-            console.log(`☁️ [PDF-OCR] Página ${pageNum} salva: ${gcsUrl}`);
-
-            // OCR da imagem
             const text = await ocrWithGoogleVision(gcsUrl);
             if (text && text.trim().length > 0) {
               pageTexts[i] = text.trim();
               pagesOCRed++;
-              console.log(`✅ [PDF-OCR] Página ${pageNum}: ${text.trim().length} chars extraídos`);
-            } else {
-              console.log(`⚠️ [PDF-OCR] Página ${pageNum}: nenhum texto detectado`);
             }
           } catch (err) {
-            console.warn(`⚠️ [PDF-OCR] Erro na página ${pageNum}: ${err.message}`);
+            // Erro na página individual — continua com as demais
           }
         })()
       );
@@ -2598,13 +2639,12 @@ async function ocrScannedPDFPages(pdfBuffer, webhookId) {
     await Promise.all(batch);
   }
 
-  // Concatenar textos com separador de página
   const combinedText = pageTexts
     .map((text, i) => text ? `--- Página ${i + 1} ---\n${text}` : null)
     .filter(Boolean)
     .join('\n\n');
 
-  console.log(`📄 [PDF-OCR] Resultado: ${pagesOCRed}/${pagesToProcess} páginas com texto, ${combinedText.length} chars total`);
+  console.log(`📄 PDF-OCR: ${pagesOCRed}/${pagesToProcess} páginas, ${combinedText.length} chars`);
 
   return {
     text: combinedText,
@@ -2634,9 +2674,7 @@ async function extractTextFromPDF(pdfBuffer, mediaUrl, webhookId) {
     return { text: pdfText, method: 'pdf-parse' };
   }
 
-  // Pouco ou nenhum texto — provavelmente é um scan/print
-  console.log(`🔍 [FileProcessing] PDF com pouco texto (${pdfText.length} chars), tentando OCR por página...`);
-
+  // Pouco ou nenhum texto — provavelmente é um scan/print, tentar OCR
   // Fallback 1: OCR por página (renderiza cada página como imagem PNG e OCR individual)
   if (webhookId) {
     try {
@@ -2644,20 +2682,19 @@ async function extractTextFromPDF(pdfBuffer, mediaUrl, webhookId) {
       if (pageResult.text && pageResult.text.trim().length > pdfText.length) {
         return pageResult;
       }
-      console.log(`⚠️ [FileProcessing] OCR por página retornou pouco texto (${pageResult.text.length} chars), tentando Vision via URL...`);
     } catch (err) {
-      console.warn(`⚠️ [FileProcessing] OCR por página falhou: ${err.message}, tentando Vision via URL...`);
+      console.warn(`⚠️ PDF OCR por página falhou: ${err.message}`);
     }
   }
 
-  // Fallback 2: Vision via URL original (legado)
+  // Fallback 2: Vision via URL original
   try {
     const ocrText = await ocrWithGoogleVision(mediaUrl);
     if (ocrText.trim().length > pdfText.length) {
       return { text: ocrText, method: 'google-vision-pdf' };
     }
   } catch (err) {
-    console.warn(`⚠️ [FileProcessing] Vision via URL falhou: ${err.message}`);
+    // Vision fallback falhou silenciosamente
   }
 
   return { text: pdfText, method: pdfText ? 'pdf-parse' : 'none' };
@@ -2692,6 +2729,48 @@ async function uploadToGCS(buffer, gcsPath, mimeType) {
   await file.makePublic();
   return `https://storage.googleapis.com/${bucketName}/${gcsPath}`;
 }
+
+// Helper: Detectar tipo de arquivo por magic bytes (file signature)
+// Segundo argumento opcional: httpContentType e fileName para desambiguar OLE2
+function detectFileTypeFromBuffer(buffer, hints) {
+  if (!buffer || buffer.length < 8) return null;
+  // PDF: starts with %PDF
+  if (buffer[0] === 0x25 && buffer[1] === 0x50 && buffer[2] === 0x44 && buffer[3] === 0x46) return 'pdf';
+  // DOCX/XLSX/PPTX (ZIP-based Office): starts with PK (0x50 0x4B)
+  if (buffer[0] === 0x50 && buffer[1] === 0x4B) return 'docx';
+  // DOC/MSG/XLS (legacy OLE2): starts with D0 CF 11 E0
+  // OLE2 é compartilhado por .doc, .msg, .xls — usar hints para desambiguar
+  if (buffer[0] === 0xD0 && buffer[1] === 0xCF && buffer[2] === 0x11 && buffer[3] === 0xE0) {
+    const ct = (hints && hints.contentType || '').toLowerCase();
+    const fn = (hints && hints.fileName || '').toLowerCase();
+    // MSG (Outlook) — não temos parser, skip
+    if (ct.includes('ms-outlook') || fn.endsWith('.msg')) return null;
+    // XLS — não temos parser, skip
+    if (ct.includes('ms-excel') || fn.endsWith('.xls')) return null;
+    return 'docx'; // assume DOC
+  }
+  // PNG: starts with 89 50 4E 47
+  if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) return 'image';
+  // JPEG: starts with FF D8 FF
+  if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) return 'image';
+  // GIF: starts with GIF8
+  if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x38) return 'image';
+  // WebP: starts with RIFF....WEBP
+  if (buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
+      buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50) return 'image';
+  // MP3: starts with FF FB, FF F3, FF F2, or ID3
+  if ((buffer[0] === 0xFF && (buffer[1] === 0xFB || buffer[1] === 0xF3 || buffer[1] === 0xF2)) ||
+      (buffer[0] === 0x49 && buffer[1] === 0x44 && buffer[2] === 0x33)) return 'audio';
+  // OGG: starts with OggS
+  if (buffer[0] === 0x4F && buffer[1] === 0x67 && buffer[2] === 0x67 && buffer[3] === 0x53) return 'audio';
+  // WAV: starts with RIFF....WAVE
+  if (buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
+      buffer[8] === 0x57 && buffer[9] === 0x41 && buffer[10] === 0x56 && buffer[11] === 0x45) return 'audio';
+  return null; // unknown — keep original classification
+}
+
+// Lock em memória para evitar processamento duplicado de itens em chamadas concorrentes
+const _processingLock = new Set();
 
 // Helper: Processar um item da fila
 async function processQueueItem(itemId) {
@@ -2786,19 +2865,46 @@ async function processQueueItem(itemId) {
     }
 
     // Baixar mídia
-    console.log(`📥 [FileProcessing] Baixando mídia: ${mediaUrl}`);
-    const mediaResponse = await axios.get(mediaUrl, {
+    emitSSE('processing', { id: itemId, step: 'download', fileName: item.mediaFileName, mediaType: item.mediaType, phone: item.sourcePhone });
+    let mediaResponse = await axios.get(mediaUrl, {
       responseType: 'arraybuffer',
       timeout: 60000,
     });
-    const mediaBuffer = Buffer.from(mediaResponse.data);
-    console.log(`✅ [FileProcessing] Mídia baixada: ${mediaBuffer.length} bytes`);
+    let mediaBuffer = Buffer.from(mediaResponse.data);
+    let responseContentType = (mediaResponse.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+    let redirected = false;
+
+    // Webhook.site retorna 302 com Location truncado, mas o HTML body tem a URL correta no meta refresh
+    if (mediaBuffer.length > 0 && mediaBuffer[0] === 0x3C) {
+      const htmlContent = mediaBuffer.toString('utf8', 0, Math.min(mediaBuffer.length, 2000));
+      const metaMatch = htmlContent.match(/url='([^']+)'/i) || htmlContent.match(/url="([^"]+)"/i);
+      if (metaMatch && metaMatch[1]) {
+        mediaResponse = await axios.get(metaMatch[1], { responseType: 'arraybuffer', timeout: 60000 });
+        mediaBuffer = Buffer.from(mediaResponse.data);
+        responseContentType = (mediaResponse.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+        redirected = true;
+      }
+    }
+
+    // Detectar tipo real do arquivo por magic bytes (file signature)
+    let mediaType = item.mediaType;
+    const detectedType = detectFileTypeFromBuffer(mediaBuffer, { contentType: responseContentType, fileName: item.mediaFileName });
+    const httpDetectedType = responseContentType ? classifyMediaType(responseContentType) : null;
+    const finalDetected = detectedType || (httpDetectedType !== 'image' ? httpDetectedType : null);
+    if (finalDetected && finalDetected !== mediaType) {
+      mediaType = finalDetected;
+      await queueRef.update({ mediaType: finalDetected, mediaTypeDetected: true });
+    }
+
+    const typeInfo = finalDetected && finalDetected !== item.mediaType ? ` (${item.mediaType}→${mediaType})` : '';
+    const redirectInfo = redirected ? ' [redirect]' : '';
+    console.log(`⚙️ [${itemId}] ${item.mediaFileName} | ${mediaBuffer.length}b ${mediaType}${typeInfo}${redirectInfo}`);
 
     // Classificar e processar
     let extractedText = '';
     let processingMethod = '';
-    const mediaType = item.mediaType;
 
+    emitSSE('processing', { id: itemId, step: 'extracting', fileName: item.mediaFileName, mediaType, phone: item.sourcePhone });
     if (mediaType === 'image') {
       extractedText = await ocrWithGoogleVision(mediaUrl);
       processingMethod = 'google-vision-ocr';
@@ -2821,9 +2927,8 @@ async function processQueueItem(itemId) {
     try {
       gcsPath = `file-processing/${mediaType}/${item.webhookId}/${item.mediaFileName}`;
       gcsUrl = await uploadToGCS(mediaBuffer, gcsPath, item.mediaMimeType);
-      console.log(`☁️ [FileProcessing] Arquivo salvo no GCS: ${gcsUrl}`);
     } catch (gcsErr) {
-      console.warn('⚠️ [FileProcessing] Erro ao salvar no GCS (não fatal):', gcsErr.message);
+      // GCS upload não fatal — continua sem salvar
     }
 
     // Sucesso
@@ -2837,10 +2942,12 @@ async function processQueueItem(itemId) {
       error: null,
     });
 
-    console.log(`✅ [FileProcessing] Item ${itemId} processado: ${extractedText.length} chars via ${processingMethod}`);
+    console.log(`✅ [${itemId}] ${extractedText.length} chars via ${processingMethod}`);
+    emitSSE('done', { id: itemId, fileName: item.mediaFileName, mediaType, phone: item.sourcePhone, method: processingMethod, chars: extractedText.length });
     return { success: true, extractedText, processingMethod, gcsUrl };
   } catch (err) {
-    console.error(`❌ [FileProcessing] Erro ao processar item ${itemId}:`, err.message);
+    console.error(`❌ [${itemId}] ${err.message}`);
+    emitSSE('error', { id: itemId, fileName: item.mediaFileName, mediaType: item.mediaType, phone: item.sourcePhone, error: err.message });
 
     const newAttempts = (item.attempts || 0) + 1;
     const maxAttempts = item.maxAttempts || 3;
@@ -3051,6 +3158,135 @@ app.get('/api/files/queue', async (req, res) => {
 });
 
 /**
+ * GET /api/prompts — Listar todos os prompts do Firestore (database: messages)
+ */
+app.get('/api/prompts', async (req, res) => {
+  try {
+    if (!firestoreDb) return res.status(500).json({ error: 'Firebase não configurado' });
+    const snapshot = await firestoreDb.collection('prompts').get();
+    const prompts = snapshot.docs.map(doc => {
+      const d = doc.data();
+      return {
+        id: doc.id,
+        name: d.name || '',
+        description: d.description || '',
+        content: d.content || '',
+        parentId: d.parentId || null,
+        order: d.order || 0,
+        createdAt: d.createdAt || '',
+        updatedAt: d.updatedAt || '',
+      };
+    });
+    res.json(prompts);
+  } catch (err) {
+    console.error('❌ Erro ao carregar prompts:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/prompts — Criar novo prompt
+ */
+app.post('/api/prompts', async (req, res) => {
+  try {
+    if (!firestoreDb) return res.status(500).json({ error: 'Firebase não configurado' });
+    const { name, description, content, parentId, order } = req.body;
+    const docRef = await firestoreDb.collection('prompts').add({
+      name, description: description || '', content: content || '',
+      parentId: parentId || null, order: order || 0,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    });
+    const doc = await docRef.get();
+    res.json({ id: doc.id, ...doc.data() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * PATCH /api/prompts/:id — Atualizar prompt
+ */
+app.patch('/api/prompts/:id', async (req, res) => {
+  try {
+    if (!firestoreDb) return res.status(500).json({ error: 'Firebase não configurado' });
+    const { name, description, content, parentId, order } = req.body;
+    const ref = firestoreDb.collection('prompts').doc(req.params.id);
+    await ref.update({ name, description: description || '', content: content || '', parentId: parentId || null, order: order || 0, updatedAt: new Date().toISOString() });
+    const doc = await ref.get();
+    res.json({ id: doc.id, ...doc.data() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * DELETE /api/prompts/:id — Deletar prompt
+ */
+app.delete('/api/prompts/:id', async (req, res) => {
+  try {
+    if (!firestoreDb) return res.status(500).json({ error: 'Firebase não configurado' });
+    await firestoreDb.collection('prompts').doc(req.params.id).delete();
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/files/extracted-texts?phone=XXXXX — Textos extraídos de arquivos processados para um contato
+ */
+app.get('/api/files/extracted-texts', async (req, res) => {
+  try {
+    if (!firestoreDb) return res.status(500).json({ error: 'Firebase não configurado' });
+    const phone = (req.query.phone || '').toString().trim();
+    if (!phone) return res.status(400).json({ error: 'phone é obrigatório' });
+
+    // Normalizar: buscar por variantes do telefone (com/sem 55, com/sem 9o dígito)
+    const clean = phone.replace(/\D/g, '');
+    const variants = new Set([clean]);
+    if (clean.startsWith('55')) variants.add(clean.substring(2));
+    else variants.add('55' + clean);
+    // 9o dígito
+    for (const v of [...variants]) {
+      if (v.length === 11 && v[2] === '9') variants.add(v.substring(0, 2) + v.substring(3));
+      if (v.length === 10) variants.add(v.substring(0, 2) + '9' + v.substring(2));
+      if (v.length === 13 && v[4] === '9') variants.add(v.substring(0, 4) + v.substring(5));
+      if (v.length === 12) variants.add(v.substring(0, 4) + '9' + v.substring(4));
+    }
+
+    const snapshot = await firestoreDb.collection('file_processing_queue')
+      .where('status', '==', 'done')
+      .limit(500)
+      .get();
+
+    const results = [];
+    for (const doc of snapshot.docs) {
+      const d = doc.data();
+      if (!d.extractedText || d.extractedText.trim().length === 0) continue;
+      const sp = (d.sourcePhone || '').replace(/\D/g, '');
+      if (!sp) continue;
+      let match = false;
+      for (const v of variants) {
+        if (sp === v || sp.endsWith(v) || v.endsWith(sp)) { match = true; break; }
+      }
+      if (!match) continue;
+      results.push({
+        id: doc.id,
+        fileName: d.mediaFileName || '',
+        mediaType: d.mediaType || '',
+        extractedText: d.extractedText,
+        processedAt: d.processedAt || '',
+      });
+    }
+
+    res.json(results);
+  } catch (err) {
+    console.error('❌ Erro ao buscar textos extraídos:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * POST /api/files/enqueue — Adiciona webhooks na fila
  * Body: { webhookIds: string[], source?: 'umbler' | 'email', attachmentIndex?: number }
  */
@@ -3169,8 +3405,10 @@ app.post('/api/files/enqueue', async (req, res) => {
         const fileName = msgFile.OriginalName || lmFile.OriginalName || `file_${webhookId}`;
         const contactPhone = (content.Contact || data.Contact || {}).PhoneNumber || '';
 
-        if (!mediaUrl && messageType && messageType !== 'Text') {
-          console.warn(`🔍 [FileProcessing/Enqueue] mediaUrl VAZIA para webhookId=${webhookId} (MessageType=${messageType})`);
+        if (!mediaUrl) {
+          console.warn(`⏭️ [FileProcessing/Enqueue] mediaUrl vazia, ignorando webhookId=${webhookId} (MessageType=${messageType})`);
+          results.push({ webhookId, error: 'Sem mediaUrl — não enfileirado' });
+          continue;
         }
 
         const thumbnailObj = message.Thumbnail || lastMessage.Thumbnail || {};
@@ -3243,8 +3481,24 @@ app.post('/api/files/process-next', async (req, res) => {
       return res.status(500).json({ error: 'Firebase não configurado' });
     }
 
-    // Buscar próximo item: queued sem nextRetryAt, ou com nextRetryAt <= now
+    // Resetar itens "processing" travados (> 5 min)
     const now = new Date().toISOString();
+    const staleThreshold = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const staleSnap = await firestoreDb
+      .collection('file_processing_queue')
+      .where('status', '==', 'processing')
+      .limit(20)
+      .get();
+    for (const doc of staleSnap.docs) {
+      const data = doc.data();
+      const startedAt = data.lastAttemptAt || data.createdAt || '';
+      if (startedAt && startedAt < staleThreshold) {
+        await doc.ref.update({ status: 'queued' });
+        console.log(`🔄 [FileProcessing] Item ${doc.id} travado em processing, resetado para queued`);
+      }
+    }
+
+    // Buscar próximo item: queued sem nextRetryAt, ou com nextRetryAt <= now
 
     // Buscar itens queued (sem orderBy composto para evitar necessidade de índice)
     let snapshot = await firestoreDb
@@ -3259,17 +3513,29 @@ app.post('/api/files/process-next', async (req, res) => {
       .filter(item => !item.nextRetryAt || item.nextRetryAt <= now)
       .sort((a, b) => (b.receivedAt || b.createdAt || '').localeCompare(a.receivedAt || a.createdAt || ''));
 
-    const nextItem = candidates.length > 0 ? candidates[0] : null;
-
-    if (!nextItem) {
-      return res.json({ message: 'Nenhum item na fila para processar', processed: false });
+    // Remover itens sem mediaUrl da fila (não têm como ser processados)
+    const noUrl = candidates.filter(item => !item.mediaUrl);
+    for (const item of noUrl) {
+      await firestoreDb.collection('file_processing_queue').doc(item.id).delete();
+      console.log(`🗑️ [FileProcessing] Removido item ${item.id} sem mediaUrl da fila`);
     }
 
-    console.log(`⚙️ [FileProcessing] Processando próximo item: ${nextItem.id}`);
-    const result = await processQueueItem(nextItem.id);
-    return res.json({ processed: true, itemId: nextItem.id, ...result });
+    const nextItem = candidates.find(item => item.mediaUrl && !_processingLock.has(item.id)) || null;
+
+    if (!nextItem) {
+      return res.json({ message: 'Nenhum item na fila para processar', processed: false, skippedNoUrl: noUrl.length });
+    }
+
+    // Lock para evitar que chamadas concorrentes peguem o mesmo item
+    _processingLock.add(nextItem.id);
+    try {
+      const result = await processQueueItem(nextItem.id);
+      return res.json({ processed: true, itemId: nextItem.id, ...result });
+    } finally {
+      _processingLock.delete(nextItem.id);
+    }
   } catch (err) {
-    console.error('❌ [FileProcessing] Erro ao processar próximo:', err.message);
+    console.error(`❌ [process-next] ${err.message}`);
     return res.status(500).json({ error: 'Erro ao processar', details: err.message });
   }
 });
@@ -3280,7 +3546,6 @@ app.post('/api/files/process-next', async (req, res) => {
 app.post('/api/files/process/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    console.log(`⚙️ [FileProcessing] Processando item específico: ${id}`);
     const result = await processQueueItem(id);
     return res.json({ processed: true, itemId: id, ...result });
   } catch (err) {
@@ -3432,6 +3697,28 @@ if (mondayKey && grokKey) {
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Servidor backend rodando em http://0.0.0.0:${PORT}`);
   console.log(`📁 Carregando variáveis de ambiente de: .env`);
+
+  // Limpeza: remover itens sem mediaUrl da fila (queued ou error)
+  if (firestoreDb) {
+    (async () => {
+      try {
+        for (const status of ['queued', 'error']) {
+          const snap = await firestoreDb.collection('file_processing_queue').where('status', '==', status).get();
+          let removed = 0;
+          for (const doc of snap.docs) {
+            const d = doc.data();
+            if (!d.mediaUrl) {
+              await doc.ref.delete();
+              removed++;
+            }
+          }
+          if (removed > 0) console.log(`🧹 [Startup] Removidos ${removed} itens "${status}" sem mediaUrl`);
+        }
+      } catch (err) {
+        console.error('⚠️ [Startup] Erro na limpeza:', err.message);
+      }
+    })();
+  }
 });
 
 

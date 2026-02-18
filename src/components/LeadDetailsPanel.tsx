@@ -64,7 +64,10 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
 
   // Estados para prompts
   const [prompts, setPrompts] = useState<Prompt[]>([]);
+  const [analysisPrompts, setAnalysisPrompts] = useState<Prompt[]>([]);
   const [usingPrompt, setUsingPrompt] = useState<string | null>(null);
+  const [analysisResult, setAnalysisResult] = useState<string | null>(null);
+  const [generatingAnalysisPrompt, setGeneratingAnalysisPrompt] = useState<string | null>(null);
   const [showEditPromptModal, setShowEditPromptModal] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState<Prompt | null>(null);
   const [promptNameInput, setPromptNameInput] = useState('');
@@ -88,6 +91,7 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
   const [documentAnalysis, setDocumentAnalysis] = useState<DocumentAnalysis | null>(null);
   const [documentsLoaded, setDocumentsLoaded] = useState(false);
   const [expandedDocs, setExpandedDocs] = useState<Set<string>>(new Set());
+  const [processedFiles, setProcessedFiles] = useState<Array<{id: string; fileName: string; mediaType: string; extractedText: string; processedAt: string}>>([]);
 
   // Estados para emails
   const [leadEmails, setLeadEmails] = useState<any[]>([]);
@@ -355,13 +359,15 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
         pulse_id: !isOrphan ? item.id : undefined,
       };
 
-      const [docs, analysis] = await Promise.all([
+      const [docs, analysis, processedRes] = await Promise.all([
         documentService.getDocumentsForContact(phoneObj as any).catch(() => []),
         phoneObj.pulse_id ? documentService.getDocumentAnalysis(phoneObj.pulse_id).catch(() => null) : Promise.resolve(null),
+        fetch(`/api/files/extracted-texts?phone=${encodeURIComponent(phone)}`).then(r => r.ok ? r.json() : []).catch(() => []),
       ]);
 
       setLeadDocuments(docs);
       setDocumentAnalysis(analysis);
+      setProcessedFiles(Array.isArray(processedRes) ? processedRes : []);
       setDocumentsLoaded(true);
       console.log(`📄 Documentos carregados para copiloto: ${docs.length} docs, análise: ${analysis ? 'sim' : 'não'}`);
     } catch (error) {
@@ -427,6 +433,17 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
       });
     }
 
+    // Adicionar arquivos processados (file_processing_queue)
+    if (processedFiles.length > 0) {
+      context += `\n## Arquivos Processados (${processedFiles.length} arquivo(s)):\n`;
+      processedFiles.forEach((f, idx) => {
+        const text = f.extractedText.length > 500
+          ? f.extractedText.substring(0, 500) + '...[truncado]'
+          : f.extractedText;
+        context += `\n### Arquivo ${idx + 1}: ${f.fileName || 'sem nome'} (${f.mediaType})\n${text}\n`;
+      });
+    }
+
     // Adicionar TODAS as mensagens do WhatsApp
     if (whatsappMessages.length > 0) {
       context += `\n## Histórico COMPLETO de Conversa WhatsApp (${whatsappMessages.length} mensagens):\n`;
@@ -449,7 +466,7 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
     }
 
     return context;
-  }, [item, columns, whatsappMessages, getLeadPhone, documentAnalysis, leadDocuments, updates]);
+  }, [item, columns, whatsappMessages, getLeadPhone, documentAnalysis, leadDocuments, processedFiles, updates]);
 
   // Função para gerar o resumo do contexto
   const generateContextSummary = useCallback(async () => {
@@ -543,44 +560,34 @@ ${fullContext}`;
     }
   }, [whatsappMessages, activeTab, scrollToBottom]);
 
-  // Carregar apenas prompts filhos de "Atendimento", exibindo nome do pai
+  // Carregar prompts: "Atendimento" para copiloto, "Análise/Análises" para documentos
   useEffect(() => {
     const loadPrompts = async () => {
       try {
         const allPrompts = await promptService.getPrompts();
         const promptMap = new Map(allPrompts.map(p => [p.id, p]));
 
-        // Encontrar o(s) prompt(s) raiz "Atendimento"
-        const atendimentoRootIds = new Set(
-          allPrompts
-            .filter(p => (!p.parentId) && p.name.trim().toLowerCase() === 'atendimento')
-            .map(p => p.id)
-        );
+        // IDs que são pai de alguém (não são folha)
+        const parentIds = new Set(allPrompts.filter(p => p.parentId).map(p => p.parentId!));
 
-        // Verificar se um prompt é descendente de "Atendimento"
-        const getAtendimentoAncestor = (prompt: Prompt): boolean => {
-          let current = prompt;
-          const visited = new Set<string>();
-          while (current.parentId && !visited.has(current.parentId)) {
-            if (atendimentoRootIds.has(current.parentId)) return true;
-            visited.add(current.parentId);
-            const parent = promptMap.get(current.parentId);
-            if (!parent) break;
-            current = parent;
-          }
-          return false;
-        };
-
-        // Filtrar descendentes de "Atendimento" e exibir com nome do pai imediato
-        const filtered = allPrompts
-          .filter(p => p.parentId && getAtendimentoAncestor(p))
+        // Filtrar só folhas cujo nome contém "atendimento", exibir pelo nome do pai
+        const filteredAtendimento = allPrompts
+          .filter(p => p.parentId && p.name.trim().toLowerCase().includes('atendimento') && !parentIds.has(p.id))
           .map(p => {
             const parent = promptMap.get(p.parentId!);
-            const parentName = parent ? parent.name : '';
-            return { ...p, name: parentName ? `${parentName} › ${p.name}` : p.name };
+            return { ...p, name: parent ? parent.name : p.name };
           });
 
-        setPrompts(filtered);
+        // Filtrar só folhas cujo nome contém "análise" ou "analise", exibir pelo nome do pai
+        const filteredAnalise = allPrompts
+          .filter(p => p.parentId && p.name.trim().toLowerCase().replace(/[áàã]/g, 'a').includes('analise') && !parentIds.has(p.id))
+          .map(p => {
+            const parent = promptMap.get(p.parentId!);
+            return { ...p, name: parent ? parent.name : p.name };
+          });
+
+        setPrompts(filteredAtendimento);
+        setAnalysisPrompts(filteredAnalise);
       } catch (error) {
         console.error('Erro ao carregar prompts:', error);
       }
@@ -651,6 +658,17 @@ ${fullContext}`;
       });
     }
 
+    // Adicionar arquivos processados (file_processing_queue)
+    if (processedFiles.length > 0) {
+      context += `\n## Arquivos Processados (${processedFiles.length} arquivo(s)):\n`;
+      processedFiles.forEach((f, idx) => {
+        const text = f.extractedText.length > 500
+          ? f.extractedText.substring(0, 500) + '...[truncado]'
+          : f.extractedText;
+        context += `\n### Arquivo ${idx + 1}: ${f.fileName || 'sem nome'} (${f.mediaType})\n${text}\n`;
+      });
+    }
+
     // Adicionar histórico de mensagens (últimas 50 mensagens)
     if (whatsappMessages.length > 0) {
       const messageLimit = 50;
@@ -668,7 +686,7 @@ ${fullContext}`;
     }
 
     return context;
-  }, [item, columns, whatsappMessages, getLeadPhone, documentAnalysis, leadDocuments]);
+  }, [item, columns, whatsappMessages, getLeadPhone, documentAnalysis, leadDocuments, processedFiles]);
 
   // Usar prompt para gerar resposta
   const handleUsePrompt = async (prompt: Prompt) => {
@@ -738,6 +756,44 @@ Instruções:
       alert(`Erro ao gerar resposta: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
     } finally {
       setUsingPrompt(null);
+    }
+  };
+
+  // Usar prompt de análise na aba de documentos
+  const handleUseAnalysisPrompt = async (prompt: Prompt) => {
+    if (generatingAnalysisPrompt) return;
+
+    setGeneratingAnalysisPrompt(prompt.id);
+    setAnalysisResult(null);
+    try {
+      const leadContext = contextSummary || getLeadContext();
+
+      const systemContext = `${prompt.content}
+
+--- CONTEXTO DO LEAD ---
+${leadContext}
+--- FIM DO CONTEXTO ---
+
+Instruções:
+- Analise todos os documentos e arquivos processados disponíveis no contexto
+- Forneça uma análise detalhada e estruturada
+- Use markdown para formatar a resposta
+- Seja objetivo e profissional`;
+
+      const response = await grokService.generateResponse(
+        'Analise os documentos e arquivos do lead conforme as instruções do prompt.',
+        {
+          systemPrompt: systemContext,
+          phoneNumber: getLeadPhone() || undefined,
+        }
+      );
+
+      setAnalysisResult(response);
+    } catch (error) {
+      console.error('Erro ao gerar análise com prompt:', error);
+      alert(`Erro ao gerar análise: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
+    } finally {
+      setGeneratingAnalysisPrompt(null);
     }
   };
 
@@ -1182,6 +1238,103 @@ Instruções:
             </div>
           )}
         </div>
+
+        {/* Arquivos Processados (file_processing_queue) */}
+        {processedFiles.length > 0 && (
+          <div className="documents-section" style={{ marginTop: '16px' }}>
+            <div className="documents-section-header">
+              <span className="documents-icon">🗃️</span>
+              <h4>Arquivos Processados</h4>
+              <span className="documents-count">{processedFiles.length}</span>
+            </div>
+            <div className="documents-list">
+              {processedFiles.map((file, idx) => {
+                const docId = `processed-${file.id}`;
+                const isExpanded = expandedDocs.has(docId);
+                const mediaTypeLabel: Record<string, string> = { pdf: 'PDF', docx: 'DOCX', image: 'Imagem', audio: 'Áudio' };
+                return (
+                  <div key={file.id} className="document-item">
+                    <div className="document-icon">
+                      {file.mediaType === 'pdf' ? '📕' : file.mediaType === 'image' ? '🖼️' : '📄'}
+                    </div>
+                    <div className="document-content">
+                      <div className="document-header">
+                        <span className="document-title">
+                          {file.fileName || `Arquivo ${idx + 1}`}
+                        </span>
+                        <span className="document-badge received">
+                          {mediaTypeLabel[file.mediaType] || file.mediaType || 'Arquivo'}
+                        </span>
+                      </div>
+                      {file.processedAt && (
+                        <div className="document-date">
+                          {new Date(file.processedAt).toLocaleDateString('pt-BR', {
+                            day: '2-digit', month: '2-digit', year: 'numeric',
+                            hour: '2-digit', minute: '2-digit'
+                          })}
+                        </div>
+                      )}
+                      {file.extractedText && (
+                        <div
+                          className={`document-preview ${isExpanded ? 'expanded' : 'collapsed'}`}
+                          onClick={() => toggleDocExpanded(docId)}
+                        >
+                          <span className="document-text">{file.extractedText}</span>
+                          <span className="document-expand-toggle">
+                            {isExpanded ? '▲' : '▼'}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Prompts de Análise */}
+        {analysisPrompts.length > 0 && (
+          <div className="documents-section" style={{ marginTop: '16px' }}>
+            <div className="documents-section-header">
+              <span className="documents-icon">🤖</span>
+              <h4>Análise por IA</h4>
+            </div>
+            <div className="analysis-prompts-grid" style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', padding: '8px 0' }}>
+              {analysisPrompts.map(prompt => (
+                <button
+                  key={prompt.id}
+                  onClick={() => handleUseAnalysisPrompt(prompt)}
+                  disabled={generatingAnalysisPrompt !== null}
+                  className="prompt-button"
+                  title={prompt.description || prompt.content?.substring(0, 100)}
+                  style={{
+                    padding: '6px 14px',
+                    borderRadius: '16px',
+                    border: '1px solid #d1d5db',
+                    background: generatingAnalysisPrompt === prompt.id ? '#e0e7ff' : '#f9fafb',
+                    cursor: generatingAnalysisPrompt ? 'not-allowed' : 'pointer',
+                    fontSize: '13px',
+                    color: '#374151',
+                    opacity: generatingAnalysisPrompt && generatingAnalysisPrompt !== prompt.id ? 0.5 : 1,
+                  }}
+                >
+                  {generatingAnalysisPrompt === prompt.id ? '⏳ Gerando...' : prompt.name}
+                </button>
+              ))}
+            </div>
+
+            {/* Resultado da análise gerada */}
+            {analysisResult && (
+              <div className="analysis-block" style={{ marginTop: '12px' }}>
+                <div className="analysis-label">Resultado da Análise</div>
+                <div className="analysis-content">
+                  <ReactMarkdown>{analysisResult}</ReactMarkdown>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Análise de Documentos do Monday */}
         {documentAnalysis && (

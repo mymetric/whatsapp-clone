@@ -333,55 +333,36 @@ const STORAGE_KEY = 'ai_prompts';
 
 export const promptService = {
   async getPrompts(): Promise<Prompt[]> {
-    // Usar Firestore REST API diretamente com as credenciais do service account
     try {
-      return await firestoreRestPromptService.getPrompts();
+      const res = await axios.get('/api/prompts');
+      return res.data;
     } catch (error: any) {
-      console.error('❌ Erro ao carregar prompts do Firestore:', error);
-      // Fallback para localStorage
+      console.error('❌ Erro ao carregar prompts:', error);
+      // Fallback para Firestore REST direto
       try {
-        const stored = localStorage.getItem(STORAGE_KEY);
-        if (stored) {
-          return JSON.parse(stored);
-        }
-      } catch (storageError) {
-        console.error('Erro ao ler prompts do localStorage:', storageError);
+        return await firestoreRestPromptService.getPrompts();
+      } catch (e2) {
+        console.error('❌ Fallback Firestore REST também falhou:', e2);
       }
       return [];
     }
   },
 
   async createPrompt(data: Omit<Prompt, 'id' | 'createdAt' | 'updatedAt'>): Promise<Prompt> {
-    // Usar Firestore REST API diretamente
-    try {
-      return await firestoreRestPromptService.createPrompt(data);
-    } catch (error: any) {
-      console.error('❌ Erro ao salvar prompt no Firestore:', error);
-      throw new Error(`Erro ao salvar prompt: ${error.message || 'Erro desconhecido'}`);
-    }
+    const res = await axios.post('/api/prompts', data);
+    return res.data;
   },
 
   async updatePrompt(
     id: string,
     data: Omit<Prompt, 'id' | 'createdAt' | 'updatedAt'>
   ): Promise<Prompt> {
-    // Usar Firestore REST API diretamente
-    try {
-      return await firestoreRestPromptService.updatePrompt(id, data);
-    } catch (error: any) {
-      console.error('❌ Erro ao atualizar prompt no Firestore:', error);
-      throw new Error(`Erro ao atualizar prompt: ${error.message || 'Erro desconhecido'}`);
-    }
+    const res = await axios.patch(`/api/prompts/${id}`, data);
+    return res.data;
   },
 
   async deletePrompt(id: string): Promise<void> {
-    // Usar Firestore REST API diretamente
-    try {
-      return await firestoreRestPromptService.deletePrompt(id);
-    } catch (error: any) {
-      console.error('❌ Erro ao deletar prompt do Firestore:', error);
-      throw new Error(`Erro ao deletar prompt: ${error.message || 'Erro desconhecido'}`);
-    }
+    await axios.delete(`/api/prompts/${id}`);
   }
 };
 

@@ -437,42 +437,18 @@ ${conversationHistory}`;
       setLoadingPrompts(true);
       try {
         const allPrompts = await promptService.getPrompts();
-        console.log('📋 Todos os prompts carregados:', allPrompts);
         const promptMap = new Map(allPrompts.map(p => [p.id, p]));
 
-        // Encontrar o(s) prompt(s) raiz "Atendimento"
-        const atendimentoRootIds = new Set(
-          allPrompts
-            .filter(p => (!p.parentId) && p.name.trim().toLowerCase() === 'atendimento')
-            .map(p => p.id)
-        );
-
-        // Verificar se um prompt é descendente de "Atendimento"
-        const getAtendimentoAncestor = (prompt: Prompt): boolean => {
-          let current = prompt;
-          const visited = new Set<string>();
-          while (current.parentId && !visited.has(current.parentId)) {
-            if (atendimentoRootIds.has(current.parentId)) return true;
-            visited.add(current.parentId);
-            const parent = promptMap.get(current.parentId);
-            if (!parent) break;
-            current = parent;
-          }
-          return false;
-        };
-
-        // Filtrar descendentes de "Atendimento" e exibir com nome do pai imediato
+        // IDs que são pai de alguém (não são folha)
+        const parentIds = new Set(allPrompts.filter(p => p.parentId).map(p => p.parentId!));
+        // Filtrar só folhas cujo nome contém "atendimento", exibir pelo nome do pai
         const filtered = allPrompts
-          .filter(p => p.parentId && getAtendimentoAncestor(p))
+          .filter(p => p.parentId && p.name.trim().toLowerCase().includes('atendimento') && !parentIds.has(p.id))
           .map(p => {
             const parent = promptMap.get(p.parentId!);
-            const parentName = parent ? parent.name : '';
-            return { ...p, name: parentName ? `${parentName} › ${p.name}` : p.name };
+            return { ...p, name: parent ? parent.name : p.name };
           });
 
-        console.log('📋 Prompts de atendimento filtrados:', filtered);
-        console.log('📋 Raízes Atendimento encontradas:', atendimentoRootIds.size, Array.from(atendimentoRootIds));
-        console.log('📋 Todos os nomes raiz:', allPrompts.filter(p => !p.parentId).map(p => `"${p.name}"`));
         setPrompts(filtered);
       } catch (error) {
         console.error('Erro ao carregar prompts:', error);
@@ -889,7 +865,7 @@ ${conversationHistory}`;
       if (emailData && typeof emailData === 'object') {
         const data = emailData as any;
         const emails: any[] = [];
-        
+
         if (Array.isArray(data.destination)) {
           emails.push(...data.destination.filter((e: any) => e && Object.keys(e).length > 0));
         }
@@ -909,6 +885,23 @@ ${conversationHistory}`;
       }
     } catch (error) {
       console.log('Não foi possível carregar emails para o contexto');
+    }
+
+    // Buscar textos extraídos de arquivos processados (PDFs, imagens, docs)
+    try {
+      const res = await fetch(`/api/files/extracted-texts?phone=${encodeURIComponent(selectedPhone._id)}`);
+      const files = await res.json();
+      if (Array.isArray(files) && files.length > 0) {
+        context += `\nDocumentos do contato (${files.length} arquivo(s) processado(s)):\n`;
+        files.forEach((f: any, idx: number) => {
+          const text = f.extractedText.length > 500
+            ? f.extractedText.substring(0, 500) + '...[truncado]'
+            : f.extractedText;
+          context += `\n--- Documento ${idx + 1}: ${f.fileName || 'sem nome'} (${f.mediaType}) ---\n${text}\n`;
+        });
+      }
+    } catch (error) {
+      console.log('Não foi possível carregar textos de arquivos processados');
     }
 
     return context;

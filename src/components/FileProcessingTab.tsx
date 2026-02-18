@@ -7,9 +7,21 @@ import {
 } from '../services/fileProcessingService';
 import './FileProcessingTab.css';
 
-type ViewMode = 'queue' | 'available' | 'done';
+type ViewMode = 'queue' | 'available' | 'done' | 'review' | 'errors';
 type FilterType = 'all' | 'image' | 'audio' | 'pdf' | 'docx';
-type FilterStatus = 'all' | 'queued' | 'processing' | 'done' | 'error';
+
+interface LiveEvent {
+  event: string;
+  id?: string;
+  fileName?: string;
+  mediaType?: string;
+  phone?: string;
+  step?: string;
+  method?: string;
+  chars?: number;
+  error?: string;
+  timestamp: string;
+}
 
 const FileProcessingTab: React.FC = () => {
   // State
@@ -18,12 +30,40 @@ const FileProcessingTab: React.FC = () => {
   const [selectedItem, setSelectedItem] = useState<FileProcessingItem | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('available');
   const [filterType, setFilterType] = useState<FilterType>('all');
-  const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [webhookRaw, setWebhookRaw] = useState<WebhookRawResponse | null>(null);
   const [loadingRaw, setLoadingRaw] = useState(false);
   const [pipelineStatus, setPipelineStatus] = useState<string>('idle');
+  const [liveEvents, setLiveEvents] = useState<LiveEvent[]>([]);
+  const [showLive, setShowLive] = useState(true);
+  const liveEndRef = useRef<HTMLDivElement>(null);
+  const lastSeqRef = useRef(0);
+
+  // Polling — eventos em tempo real (2s)
+  useEffect(() => {
+    let active = true;
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/files/recent-events?after=${lastSeqRef.current}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.events && data.events.length > 0 && active) {
+          setLiveEvents(prev => [...prev, ...data.events].slice(-100));
+          lastSeqRef.current = data.lastSeq;
+        }
+      } catch {}
+    };
+    poll();
+    const interval = setInterval(poll, 2000);
+    return () => { active = false; clearInterval(interval); };
+  }, []);
+
+  useEffect(() => {
+    if (showLive && liveEndRef.current) {
+      liveEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [liveEvents, showLive]);
 
   // Load data
   const loadQueue = useCallback(async () => {
@@ -125,9 +165,11 @@ const FileProcessingTab: React.FC = () => {
             const batchProcessed = results.filter(r => r.processed).length;
             totalProcessed += batchProcessed;
             hasMore = batchProcessed > 0;
+
+            // Atualizar fila após cada batch para refletir contadores em tempo real
+            const midQueue = await fileProcessingService.getQueue({ limit: 1000 });
+            setQueueItems(midQueue);
           }
-          const updatedQueue = await fileProcessingService.getQueue({ limit: 1000 });
-          setQueueItems(updatedQueue);
         }
 
         setPipelineStatus('idle');
@@ -240,6 +282,8 @@ const FileProcessingTab: React.FC = () => {
   };
 
   const [clearingErrors, setClearingErrors] = useState(false);
+  const [reprocessingReview, setReprocessingReview] = useState(false);
+  const [reprocessedCount, setReprocessedCount] = useState(0);
   const handleClearErrors = async () => {
     const errorItems = queueItems.filter(i => i.status === 'error');
     if (errorItems.length === 0) return;
@@ -259,6 +303,48 @@ const FileProcessingTab: React.FC = () => {
     }
   };
 
+  const handleReprocessReview = async () => {
+    const reviewItems = queueItems.filter(i => i.status === 'done' && (!i.extractedText || i.extractedText.trim().length === 0));
+    if (reviewItems.length === 0) return;
+    setReprocessingReview(true);
+    setReprocessedCount(0);
+    try {
+      for (const item of reviewItems) {
+        await fileProcessingService.retryItem(item.id);
+        setReprocessedCount(prev => prev + 1);
+      }
+      if (selectedItem && reviewItems.some(i => i.id === selectedItem.id)) {
+        setSelectedItem(null);
+      }
+      await loadQueue();
+    } catch (err) {
+      console.error('Erro ao reprocessar revisão:', err);
+    } finally {
+      setReprocessingReview(false);
+      setReprocessedCount(0);
+    }
+  };
+
+  const [clearingQueue, setClearingQueue] = useState(false);
+  const handleClearQueue = async () => {
+    const active = queueItems.filter(i => i.status === 'queued' || i.status === 'processing');
+    if (active.length === 0) return;
+    setClearingQueue(true);
+    try {
+      for (const item of active) {
+        await fileProcessingService.removeFromQueue(item.id);
+      }
+      if (selectedItem && active.some(i => i.id === selectedItem.id)) {
+        setSelectedItem(null);
+      }
+      await loadQueue();
+    } catch (err) {
+      console.error('Erro ao limpar fila:', err);
+    } finally {
+      setClearingQueue(false);
+    }
+  };
+
   const handleCopyText = (text: string) => {
     navigator.clipboard.writeText(text);
   };
@@ -273,6 +359,7 @@ const FileProcessingTab: React.FC = () => {
 
   const getAvailableWebhooks = (): MediaWebhook[] => {
     return mediaWebhooks.filter(w => {
+      if (!w.mediaUrl) return false; // sem URL = não processável
       const key = w.source === 'email' && w.attachmentIndex !== undefined
         ? `${w.id}_att${w.attachmentIndex}`
         : w.id;
@@ -281,14 +368,11 @@ const FileProcessingTab: React.FC = () => {
   };
 
   const getFilteredQueue = (): FileProcessingItem[] => {
-    // Aba "Fila" mostra apenas pendentes (queued, processing, error)
-    let filtered = queueItems.filter(i => i.status !== 'done');
+    // Aba "Fila" mostra apenas pendentes (queued, processing) — erros vão para aba própria
+    let filtered = queueItems.filter(i => i.status === 'queued' || i.status === 'processing');
 
     if (filterType !== 'all') {
       filtered = filtered.filter(i => i.mediaType === filterType);
-    }
-    if (filterStatus !== 'all') {
-      filtered = filtered.filter(i => i.status === filterStatus);
     }
     if (searchTerm.trim()) {
       const term = searchTerm.toLowerCase();
@@ -300,8 +384,25 @@ const FileProcessingTab: React.FC = () => {
     return filtered;
   };
 
+  const getFilteredErrors = (): FileProcessingItem[] => {
+    let filtered = queueItems.filter(i => i.status === 'error');
+
+    if (filterType !== 'all') {
+      filtered = filtered.filter(i => i.mediaType === filterType);
+    }
+    if (searchTerm.trim()) {
+      const term = searchTerm.toLowerCase();
+      filtered = filtered.filter(i =>
+        i.mediaFileName.toLowerCase().includes(term) ||
+        i.sourcePhone.includes(term) ||
+        (i.error || '').toLowerCase().includes(term)
+      );
+    }
+    return filtered;
+  };
+
   const getFilteredDone = (): FileProcessingItem[] => {
-    let filtered = queueItems.filter(i => i.status === 'done');
+    let filtered = queueItems.filter(i => i.status === 'done' && i.extractedText && i.extractedText.trim().length > 0);
 
     if (filterType !== 'all') {
       filtered = filtered.filter(i => i.mediaType === filterType);
@@ -312,6 +413,22 @@ const FileProcessingTab: React.FC = () => {
         i.mediaFileName.toLowerCase().includes(term) ||
         i.sourcePhone.includes(term) ||
         (i.extractedText || '').toLowerCase().includes(term)
+      );
+    }
+    return filtered;
+  };
+
+  const getFilteredReview = (): FileProcessingItem[] => {
+    let filtered = queueItems.filter(i => i.status === 'done' && (!i.extractedText || i.extractedText.trim().length === 0) && i.mediaType !== 'audio');
+
+    if (filterType !== 'all') {
+      filtered = filtered.filter(i => i.mediaType === filterType);
+    }
+    if (searchTerm.trim()) {
+      const term = searchTerm.toLowerCase();
+      filtered = filtered.filter(i =>
+        i.mediaFileName.toLowerCase().includes(term) ||
+        i.sourcePhone.includes(term)
       );
     }
     return filtered;
@@ -333,15 +450,24 @@ const FileProcessingTab: React.FC = () => {
     return filtered;
   };
 
+  // Live counters (derivado dos eventos da sessão)
+  const liveProcessed = liveEvents.filter(e => e.event === 'done').length;
+  const liveErrors = liveEvents.filter(e => e.event === 'error').length;
+  const lastEvent = liveEvents.length > 0 ? liveEvents[liveEvents.length - 1] : null;
+
   // Stats
-  const pendingItems = queueItems.filter(i => i.status !== 'done');
   const doneItems = queueItems.filter(i => i.status === 'done');
+  const reviewItems = doneItems.filter(i => (!i.extractedText || i.extractedText.trim().length === 0) && i.mediaType !== 'audio');
+  const doneWithText = doneItems.filter(i => i.extractedText && i.extractedText.trim().length > 0);
+  const errorItems = queueItems.filter(i => i.status === 'error');
+  const queuedActive = queueItems.filter(i => i.status === 'queued' || i.status === 'processing');
   const stats = {
-    pending: pendingItems.length,
+    pending: queuedActive.length,
     queued: queueItems.filter(i => i.status === 'queued').length,
     processing: queueItems.filter(i => i.status === 'processing').length,
-    done: doneItems.length,
-    error: queueItems.filter(i => i.status === 'error').length,
+    done: doneWithText.length,
+    review: reviewItems.length,
+    error: errorItems.length,
     available: getAvailableWebhooks().length,
   };
 
@@ -367,30 +493,32 @@ const FileProcessingTab: React.FC = () => {
               <span className="fp-stat">Fila: {stats.queued}</span>
               <span className="fp-stat">Processando: {stats.processing}</span>
               <span className="fp-stat">Prontos: {stats.done}</span>
+              {stats.review > 0 && <span className="fp-stat fp-stat-review">Revisão: {stats.review}</span>}
               {stats.error > 0 && <span className="fp-stat fp-stat-error">Erros: {stats.error}</span>}
               <span className="fp-stat">Disponíveis: {stats.available}</span>
             </div>
           </div>
           <div className="fp-pipeline-status">
-            {pipelineStatus.startsWith('enqueue:') && (
+            {liveEvents.length > 0 && (
+              <span className="fp-live-counter">
+                <span className={`fp-live-counter-dot ${lastEvent?.event === 'processing' ? 'active' : ''}`} />
+                {liveProcessed} processados
+                {liveErrors > 0 && <span className="fp-live-counter-errors"> | {liveErrors} erros</span>}
+                {lastEvent && lastEvent.event === 'processing' && (
+                  <span className="fp-live-counter-current"> | {lastEvent.fileName}</span>
+                )}
+                {lastEvent && lastEvent.event === 'done' && (
+                  <span className="fp-live-counter-last"> | {lastEvent.fileName}: {lastEvent.chars} chars</span>
+                )}
+              </span>
+            )}
+            {liveEvents.length === 0 && pipelineStatus.startsWith('enqueue:') && (
               <span className="fp-pipeline-indicator enqueuing">
                 <span className="fp-pipeline-dot"></span>
                 Enfileirando {pipelineStatus.split(':')[1]} arquivo(s)...
               </span>
             )}
-            {pipelineStatus.startsWith('process:') && (
-              <span className="fp-pipeline-indicator processing">
-                <span className="fp-pipeline-dot"></span>
-                Processando arquivo #{pipelineStatus.split(':')[1]}...
-              </span>
-            )}
-            {pipelineStatus === 'idle' && (stats.queued > 0 || stats.processing > 0) && (
-              <span className="fp-pipeline-indicator waiting">
-                <span className="fp-pipeline-dot"></span>
-                Aguardando ciclo...
-              </span>
-            )}
-            {pipelineStatus === 'idle' && stats.queued === 0 && stats.processing === 0 && stats.available === 0 && stats.done > 0 && (
+            {liveEvents.length === 0 && pipelineStatus === 'idle' && stats.queued === 0 && stats.processing === 0 && stats.available === 0 && stats.done > 0 && (
               <span className="fp-pipeline-indicator done">
                 Tudo processado
               </span>
@@ -398,13 +526,33 @@ const FileProcessingTab: React.FC = () => {
           </div>
         </div>
         <div className="fp-header-actions">
-          {viewMode === 'queue' && stats.error > 0 && (
+          {viewMode === 'review' && stats.review > 0 && (
+            <button
+              className="fp-btn fp-btn-warning"
+              onClick={handleReprocessReview}
+              disabled={reprocessingReview}
+            >
+              {reprocessingReview
+                ? `Reprocessando ${reprocessedCount}/${stats.review}...`
+                : `Reprocessar Todos (${stats.review})`}
+            </button>
+          )}
+          {viewMode === 'queue' && stats.pending > 0 && (
+            <button
+              className="fp-btn fp-btn-danger"
+              onClick={handleClearQueue}
+              disabled={clearingQueue}
+            >
+              {clearingQueue ? 'Limpando...' : `Limpar Fila (${stats.pending})`}
+            </button>
+          )}
+          {viewMode === 'errors' && stats.error > 0 && (
             <button
               className="fp-btn fp-btn-danger"
               onClick={handleClearErrors}
               disabled={clearingErrors}
             >
-              {clearingErrors ? 'Limpando...' : `Limpar Erros (${stats.error})`}
+              {clearingErrors ? 'Limpando...' : `Limpar Todos (${stats.error})`}
             </button>
           )}
           <button
@@ -448,6 +596,20 @@ const FileProcessingTab: React.FC = () => {
               >
                 Processados ({stats.done})
               </button>
+              <button
+                className={`fp-tab-btn ${viewMode === 'review' ? 'active' : ''} ${stats.review > 0 ? 'has-items' : ''}`}
+                onClick={() => setViewMode('review')}
+              >
+                Revisão ({stats.review})
+              </button>
+              {stats.error > 0 && (
+                <button
+                  className={`fp-tab-btn ${viewMode === 'errors' ? 'active' : ''} fp-tab-btn-error`}
+                  onClick={() => setViewMode('errors')}
+                >
+                  Erros ({stats.error})
+                </button>
+              )}
             </div>
             <div className="fp-filters-row">
               <select
@@ -461,18 +623,6 @@ const FileProcessingTab: React.FC = () => {
                 <option value="pdf">PDFs</option>
                 <option value="docx">Word (DOCX)</option>
               </select>
-              {viewMode === 'queue' && (
-                <select
-                  className="fp-filter-select"
-                  value={filterStatus}
-                  onChange={e => setFilterStatus(e.target.value as FilterStatus)}
-                >
-                  <option value="all">Todos os status</option>
-                  <option value="queued">Na fila</option>
-                  <option value="processing">Processando</option>
-                  <option value="error">Com erro</option>
-                </select>
-              )}
             </div>
           </div>
 
@@ -554,8 +704,98 @@ const FileProcessingTab: React.FC = () => {
                 ))}
                 {getFilteredDone().length === 0 && (
                   <div className="fp-empty">
-                    <p>Nenhum arquivo processado</p>
-                    <p>Os arquivos concluídos aparecerão aqui</p>
+                    <p>Nenhum arquivo processado com texto</p>
+                    <p>Os arquivos com texto extraído aparecerão aqui</p>
+                  </div>
+                )}
+              </>
+            ) : viewMode === 'review' ? (
+              <>
+                {getFilteredReview().map(item => (
+                  <div
+                    key={item.id}
+                    className={`fp-queue-card review-card ${selectedItem?.id === item.id ? 'selected' : ''}`}
+                    onClick={() => setSelectedItem(item)}
+                  >
+                    <div className={`fp-type-icon ${item.mediaType}`}>
+                      {getTypeIcon(item.mediaType)}
+                    </div>
+                    <div className="fp-card-info">
+                      <div className="fp-card-name">{item.mediaFileName}</div>
+                      <div className="fp-card-meta">
+                        {getFileExtension(item.mediaFileName) && (
+                          <span className="fp-ext-badge">{getFileExtension(item.mediaFileName)}</span>
+                        )}
+                        <span className={`fp-source-badge ${item.webhookSource || 'umbler'}`}>
+                          {getSourceLabel(item.webhookSource)}
+                        </span>
+                        <span className="fp-card-phone">{formatPhone(item.sourcePhone)}</span>
+                        <span className="fp-card-time">Enviado: {formatDate(item.receivedAt || item.createdAt)}</span>
+                      </div>
+                    </div>
+                    <div className="fp-card-right">
+                      <span className="fp-status-badge review">Sem texto</span>
+                      {item.processingMethod && (
+                        <span className="fp-result-method">{item.processingMethod}</span>
+                      )}
+                      <button
+                        className="fp-btn-reprocess"
+                        title="Reprocessar"
+                        onClick={e => { e.stopPropagation(); handleRetry(item.id); }}
+                      >
+                        Reprocessar
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                {getFilteredReview().length === 0 && (
+                  <div className="fp-empty">
+                    <p>Nenhum arquivo para revisão</p>
+                    <p>Arquivos processados sem texto extraído aparecerão aqui</p>
+                  </div>
+                )}
+              </>
+            ) : viewMode === 'errors' ? (
+              <>
+                {getFilteredErrors().map(item => (
+                  <div
+                    key={item.id}
+                    className={`fp-queue-card error-card ${selectedItem?.id === item.id ? 'selected' : ''}`}
+                    onClick={() => setSelectedItem(item)}
+                  >
+                    <div className={`fp-type-icon ${item.mediaType}`}>
+                      {getTypeIcon(item.mediaType)}
+                    </div>
+                    <div className="fp-card-info">
+                      <div className="fp-card-name">{item.mediaFileName}</div>
+                      <div className="fp-card-meta">
+                        {getFileExtension(item.mediaFileName) && (
+                          <span className="fp-ext-badge">{getFileExtension(item.mediaFileName)}</span>
+                        )}
+                        <span className={`fp-source-badge ${item.webhookSource || 'umbler'}`}>
+                          {getSourceLabel(item.webhookSource)}
+                        </span>
+                        <span className="fp-card-phone">{formatPhone(item.sourcePhone)}</span>
+                        <span className="fp-card-time">{formatDate(item.lastAttemptAt || item.createdAt)}</span>
+                      </div>
+                      <div className="fp-card-error-msg">{item.error}</div>
+                    </div>
+                    <div className="fp-card-right">
+                      <span className="fp-status-badge error">Erro</span>
+                      <span className="fp-attempts">{item.attempts}/{item.maxAttempts}</span>
+                      <button
+                        className="fp-btn-reprocess"
+                        title="Retentar"
+                        onClick={e => { e.stopPropagation(); handleRetry(item.id); }}
+                      >
+                        Retentar
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                {getFilteredErrors().length === 0 && (
+                  <div className="fp-empty">
+                    <p>Nenhum erro</p>
                   </div>
                 )}
               </>
@@ -698,21 +938,23 @@ const FileProcessingTab: React.FC = () => {
                   <p className="fp-no-text">Nenhuma URL encontrada</p>
                 )}
 
-                <h4 style={{ marginTop: 16 }}>
-                  Webhook completo
-                  {webhookRaw && (
-                    <span className="fp-result-method">{webhookRaw.collection}</span>
+                <details className="fp-webhook-collapse">
+                  <summary>
+                    Webhook completo
+                    {webhookRaw && (
+                      <span className="fp-result-method">{webhookRaw.collection}</span>
+                    )}
+                  </summary>
+                  {loadingRaw ? (
+                    <div className="fp-webhook-raw-loading">Carregando...</div>
+                  ) : webhookRaw ? (
+                    <pre className="fp-webhook-raw-json">
+                      {JSON.stringify(webhookRaw.webhook, null, 2)}
+                    </pre>
+                  ) : (
+                    <p className="fp-no-text">Não foi possível carregar o webhook</p>
                   )}
-                </h4>
-                {loadingRaw ? (
-                  <div className="fp-webhook-raw-loading">Carregando...</div>
-                ) : webhookRaw ? (
-                  <pre className="fp-webhook-raw-json">
-                    {JSON.stringify(webhookRaw.webhook, null, 2)}
-                  </pre>
-                ) : (
-                  <p className="fp-no-text">Não foi possível carregar o webhook</p>
-                )}
+                </details>
               </div>
 
               {/* Extracted text */}
@@ -768,6 +1010,14 @@ const FileProcessingTab: React.FC = () => {
                     Retentar
                   </button>
                 )}
+                {selectedItem.status === 'done' && (!selectedItem.extractedText || selectedItem.extractedText.trim().length === 0) && (
+                  <button
+                    className="fp-btn fp-btn-warning"
+                    onClick={() => handleRetry(selectedItem.id)}
+                  >
+                    Reprocessar
+                  </button>
+                )}
                 {selectedItem.extractedText && (
                   <button
                     className="fp-btn fp-btn-secondary"
@@ -792,6 +1042,45 @@ const FileProcessingTab: React.FC = () => {
             </div>
           )}
         </div>
+      </div>
+
+      {/* Live feed */}
+      <div className={`fp-live-panel ${showLive ? 'open' : ''}`}>
+        <div className="fp-live-header" onClick={() => setShowLive(v => !v)}>
+          <span className="fp-live-title">
+            <span className={`fp-live-dot ${liveEvents.length > 0 && liveEvents[liveEvents.length - 1]?.event === 'processing' ? 'active' : ''}`} />
+            Live ({liveEvents.length})
+          </span>
+          <span className="fp-live-toggle">{showLive ? '\u25BC' : '\u25B2'}</span>
+        </div>
+        {showLive && (
+          <div className="fp-live-feed">
+            {liveEvents.length === 0 && (
+              <div className="fp-live-empty">Aguardando eventos de processamento...</div>
+            )}
+            {liveEvents.map((ev, i) => (
+              <div key={i} className={`fp-live-entry fp-live-${ev.event}`}>
+                <span className="fp-live-time">
+                  {new Date(ev.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                </span>
+                <span className={`fp-live-icon fp-live-icon-${ev.event}`}>
+                  {ev.event === 'processing' && ev.step === 'download' && '\u2B07\uFE0F'}
+                  {ev.event === 'processing' && ev.step === 'extracting' && '\u2699\uFE0F'}
+                  {ev.event === 'done' && '\u2705'}
+                  {ev.event === 'error' && '\u274C'}
+                </span>
+                <span className="fp-live-file">{ev.fileName || ev.id}</span>
+                <span className="fp-live-detail">
+                  {ev.event === 'processing' && ev.step === 'download' && 'Baixando...'}
+                  {ev.event === 'processing' && ev.step === 'extracting' && `Extraindo (${ev.mediaType})...`}
+                  {ev.event === 'done' && `${ev.chars} chars via ${ev.method}`}
+                  {ev.event === 'error' && (ev.error || 'Erro')}
+                </span>
+              </div>
+            ))}
+            <div ref={liveEndRef} />
+          </div>
+        )}
       </div>
     </div>
   );

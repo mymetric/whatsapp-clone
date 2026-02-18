@@ -4,6 +4,14 @@ import { Phone, DocumentRecord } from '../types';
 import { documentService, DocumentAnalysis } from '../services/api';
 import './DocumentsTab.css';
 
+interface ProcessedFile {
+  id: string;
+  fileName: string;
+  mediaType: string;
+  extractedText: string;
+  processedAt: string;
+}
+
 interface DocumentsTabProps {
   selectedPhone: Phone | null;
 }
@@ -21,6 +29,9 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ selectedPhone }) => {
   const [error, setError] = useState<string | null>(null);
   const [expandedDocuments, setExpandedDocuments] = useState<Record<string, boolean>>({});
   const [expandedAnalysis, setExpandedAnalysis] = useState(false);
+  const [processedFiles, setProcessedFiles] = useState<ProcessedFile[]>([]);
+  const [loadingProcessed, setLoadingProcessed] = useState(false);
+  const [expandedProcessed, setExpandedProcessed] = useState<Record<string, boolean>>({});
   const refreshTimerRef = useRef<NodeJS.Timeout | null>(null);
   const countdownTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
@@ -141,12 +152,36 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ selectedPhone }) => {
     }
   }, [selectedPhone]);
 
+  const fetchProcessedFiles = useCallback(async () => {
+    if (!selectedPhone?._id) {
+      setProcessedFiles([]);
+      return;
+    }
+    setLoadingProcessed(true);
+    try {
+      const res = await fetch(`/api/files/extracted-texts?phone=${encodeURIComponent(selectedPhone._id)}`);
+      if (res.ok) {
+        const files: ProcessedFile[] = await res.json();
+        setProcessedFiles(files);
+      } else {
+        setProcessedFiles([]);
+      }
+    } catch (err) {
+      console.error('Erro ao carregar arquivos processados:', err);
+      setProcessedFiles([]);
+    } finally {
+      setLoadingProcessed(false);
+    }
+  }, [selectedPhone]);
+
   useEffect(() => {
     if (!selectedPhone) {
       setDocuments([]);
       setAnalysis(null);
+      setProcessedFiles([]);
       setError(null);
       setCountdown(null);
+      setExpandedProcessed({});
       // Limpar timers ao trocar de contato
       if (refreshTimerRef.current) {
         clearTimeout(refreshTimerRef.current);
@@ -161,7 +196,8 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ selectedPhone }) => {
 
     fetchAnalysis();
     fetchDocuments();
-  }, [selectedPhone, fetchAnalysis, fetchDocuments]);
+    fetchProcessedFiles();
+  }, [selectedPhone, fetchAnalysis, fetchDocuments, fetchProcessedFiles]);
 
   // Limpar timers ao desmontar componente
   useEffect(() => {
@@ -174,6 +210,10 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ selectedPhone }) => {
       }
     };
   }, []);
+
+  const handleToggleProcessed = (id: string) => {
+    setExpandedProcessed((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
 
   const handleToggleDocument = (id: string) => {
     setExpandedDocuments((prev) => ({
@@ -240,6 +280,7 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ selectedPhone }) => {
           onClick={() => {
             fetchAnalysis();
             fetchDocuments();
+            fetchProcessedFiles();
           }}
           className="documents-refresh-button"
           title="Atualizar documentos e análise"
@@ -468,6 +509,81 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ selectedPhone }) => {
                       </div>
                     </div>
                   )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Seção de Arquivos Processados (file_processing_queue) */}
+        {(processedFiles.length > 0 || loadingProcessed) && (
+          <>
+            <div className="documents-separator"></div>
+            <div className="documents-section-header">
+              <h3 className="documents-section-title">
+                <span className="documents-section-icon">🗃️</span>
+                Arquivos Processados ({processedFiles.length})
+              </h3>
+            </div>
+          </>
+        )}
+
+        {loadingProcessed && (
+          <div className="documents-loading">
+            <div className="loading-spinner"></div>
+            <p>Carregando arquivos processados...</p>
+          </div>
+        )}
+
+        {!loadingProcessed && processedFiles.length > 0 && (
+          <div className="documents-list">
+            {processedFiles.map((file) => {
+              const isExpanded = Boolean(expandedProcessed[file.id]);
+              const lineCount = file.extractedText.split(/\r?\n/).length;
+              const hasLongText = lineCount > 3 || file.extractedText.length > MAX_PREVIEW_LENGTH;
+
+              const mediaTypeLabel: Record<string, string> = {
+                pdf: 'PDF',
+                docx: 'DOCX',
+                image: 'Imagem',
+                audio: 'Áudio',
+              };
+
+              return (
+                <div key={file.id} className="document-card">
+                  <div className="document-card-header">
+                    <div className="document-card-header-left">
+                      <span className="document-pill document-pill-default">
+                        {mediaTypeLabel[file.mediaType] || file.mediaType || 'Arquivo'}
+                      </span>
+                      <span className="document-origin">
+                        {file.fileName || 'Sem nome'}
+                      </span>
+                    </div>
+                    <div className="document-timestamps">
+                      {file.processedAt && (
+                        <span>
+                          Processado em <strong>{formatDateTime(file.processedAt)}</strong>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div
+                    className={`document-text ${
+                      hasLongText && !isExpanded ? 'document-text-collapsed' : ''
+                    }`}
+                  >
+                    <pre>{file.extractedText}</pre>
+                    {hasLongText && (
+                      <button
+                        className="document-toggle-button"
+                        onClick={() => handleToggleProcessed(file.id)}
+                      >
+                        {isExpanded ? 'Ver menos' : 'Ver mais'}
+                      </button>
+                    )}
+                  </div>
                 </div>
               );
             })}

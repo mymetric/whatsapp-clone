@@ -35,6 +35,11 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ selectedPhone }) => {
   const refreshTimerRef = useRef<NodeJS.Timeout | null>(null);
   const countdownTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchResults, setSearchResults] = useState<DocumentRecord[] | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [expandedSearch, setExpandedSearch] = useState<Record<string, boolean>>({});
 
   const fetchAnalysis = useCallback(async () => {
     if (!selectedPhone?.pulse_id) {
@@ -222,6 +227,73 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ selectedPhone }) => {
     }));
   };
 
+  const handleToggleSearch = (id: string) => {
+    setExpandedSearch((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const handleSearch = useCallback(async () => {
+    const query = searchQuery.trim();
+    if (!query) return;
+
+    setSearchLoading(true);
+    setSearchError(null);
+    setSearchResults(null);
+    setExpandedSearch({});
+
+    try {
+      const isEmail = query.includes('@');
+      let docs: DocumentRecord[];
+
+      if (isEmail) {
+        docs = await documentService.getDocumentsByEmail(query);
+      } else {
+        docs = await documentService.getDocumentsByPhone(query);
+      }
+
+      // Também buscar arquivos processados por telefone (se não for email)
+      if (!isEmail) {
+        try {
+          const res = await fetch(`/api/files/extracted-texts?phone=${encodeURIComponent(query)}`);
+          if (res.ok) {
+            const files: ProcessedFile[] = await res.json();
+            // Converter para DocumentRecord para exibir junto
+            const fileDocs: DocumentRecord[] = files.map(f => ({
+              id: f.id,
+              origin: 'phone' as const,
+              direction: 'received' as const,
+              text: f.extractedText,
+              images: [],
+              metadata: { subject: `[Arquivo Processado] ${f.fileName} (${f.mediaType})` },
+              createdAt: f.processedAt,
+            }));
+            docs = [...docs, ...fileDocs];
+          }
+        } catch {
+          // Ignorar erro de arquivos processados
+        }
+      }
+
+      docs.sort((a, b) => {
+        const getTime = (r: DocumentRecord) => {
+          const ref = r.updatedAt || r.createdAt;
+          return ref ? new Date(ref).getTime() || 0 : 0;
+        };
+        return getTime(b) - getTime(a);
+      });
+
+      setSearchResults(docs);
+      if (docs.length === 0) {
+        setSearchError('Nenhum documento encontrado para esta busca');
+      }
+    } catch (err) {
+      console.error('Erro na busca de documentos:', err);
+      setSearchError('Erro ao buscar documentos');
+      setSearchResults([]);
+    } finally {
+      setSearchLoading(false);
+    }
+  }, [searchQuery]);
+
   const formatDateTime = useCallback((iso?: string) => {
     if (!iso) return 'Data não disponível';
     const date = new Date(iso);
@@ -292,6 +364,130 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ selectedPhone }) => {
           <span>Atualizar</span>
         </button>
       </div>
+
+      {/* Busca por email ou telefone */}
+      <div className="documents-search-bar">
+        <input
+          type="text"
+          className="documents-search-input"
+          placeholder="Buscar documentos por email ou telefone..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
+        />
+        <button
+          className="documents-search-button"
+          onClick={handleSearch}
+          disabled={searchLoading || !searchQuery.trim()}
+        >
+          {searchLoading ? 'Buscando...' : 'Buscar'}
+        </button>
+        {searchResults !== null && (
+          <button
+            className="documents-search-clear"
+            onClick={() => { setSearchQuery(''); setSearchResults(null); setSearchError(null); setExpandedSearch({}); }}
+            title="Limpar busca"
+          >
+            Limpar
+          </button>
+        )}
+      </div>
+
+      {/* Resultados da busca */}
+      {searchResults !== null && (
+        <div className="documents-tab-content">
+          <div className="documents-section-header">
+            <h3 className="documents-section-title">
+              <span className="documents-section-icon">🔍</span>
+              Resultados da Busca ({searchResults.length})
+            </h3>
+          </div>
+
+          {searchError && (
+            <div className="documents-error">
+              <div className="error-icon">⚠️</div>
+              <p>{searchError}</p>
+            </div>
+          )}
+
+          {searchResults.length > 0 && (
+            <div className="documents-list">
+              {searchResults.map((document) => {
+                const isExpanded = Boolean(expandedSearch[document.id]);
+                const directionLabel = document.direction ? directionLabels[document.direction] : 'Documento';
+                const originLabel = originLabels[document.origin];
+                const fullText = document.text || '';
+                const lineCount = fullText.split(/\r?\n/).length;
+                const hasLongText = lineCount > 3 || fullText.length > MAX_PREVIEW_LENGTH;
+
+                return (
+                  <div key={`search-${document.origin}-${document.id}`} className="document-card">
+                    <div className="document-card-header">
+                      <div className="document-card-header-left">
+                        <span className={`document-pill document-pill-${document.direction ?? 'default'}`}>
+                          {directionLabel}
+                        </span>
+                        <span className="document-origin">
+                          {originLabel}
+                          {document.metadata?.subject && ` • ${document.metadata.subject}`}
+                        </span>
+                      </div>
+                      <div className="document-timestamps">
+                        {document.createdAt && (
+                          <span>Recebido em <strong>{formatDateTime(document.createdAt)}</strong></span>
+                        )}
+                        {!document.createdAt && document.updatedAt && (
+                          <span>Atualizado em <strong>{formatDateTime(document.updatedAt)}</strong></span>
+                        )}
+                      </div>
+                    </div>
+
+                    {document.metadata && (
+                      <div className="document-meta">
+                        {document.metadata.sender && <div><strong>Remetente:</strong> {document.metadata.sender}</div>}
+                        {document.metadata.destination && <div><strong>Destinatário:</strong> {document.metadata.destination}</div>}
+                      </div>
+                    )}
+
+                    {fullText && (
+                      <div className={`document-text ${hasLongText && !isExpanded ? 'document-text-collapsed' : ''}`}>
+                        <pre>{fullText}</pre>
+                        {hasLongText && (
+                          <button className="document-toggle-button" onClick={() => handleToggleSearch(document.id)}>
+                            {isExpanded ? 'Ver menos' : 'Ver mais'}
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {document.images.length > 0 && (
+                      <div className="document-images">
+                        <h4>Arquivos vinculados</h4>
+                        <div className="document-images-grid">
+                          {document.images.map((image, index) => (
+                            <div key={`${image.fileId}-${index}`} className="document-image-item">
+                              <div className="document-image-header">
+                                <span className="document-image-name">📄 {image.fileId}</span>
+                                <a href={image.url} target="_blank" rel="noopener noreferrer" className="document-image-link">Abrir</a>
+                              </div>
+                              {image.extractedText && (
+                                <div className="document-image-transcription">
+                                  <span className="transcription-label">Transcrição</span>
+                                  <pre>{image.extractedText}</pre>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="documents-tab-content">
         {/* Seção de Análise */}

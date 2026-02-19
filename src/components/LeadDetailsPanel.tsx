@@ -49,6 +49,7 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
   const [sendingMessage, setSendingMessage] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const allPromptsMapRef = useRef<Map<string, Prompt>>(new Map());
 
   // Estados para cadastro de lead
   const [showCreateLeadModal, setShowCreateLeadModal] = useState(false);
@@ -376,97 +377,143 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
     }
   }, [getLeadPhone, documentsLoaded, item, isOrphan]);
 
-  // Carregar documentos quando a aba copilot, details ou documents for selecionada
+  // Carregar documentos e emails quando necessário para contexto
   useEffect(() => {
-    if ((activeTab === 'copilot' || activeTab === 'details' || activeTab === 'documents') && !documentsLoaded) {
+    const needsContext = activeTab === 'copilot' || activeTab === 'details' || activeTab === 'documents' || activeTab === 'whatsapp';
+    if (needsContext && !documentsLoaded) {
       loadDocuments();
     }
-  }, [activeTab, documentsLoaded, loadDocuments]);
+    if (needsContext && !emailsLoaded) {
+      loadLeadEmails();
+    }
+  }, [activeTab, documentsLoaded, loadDocuments, emailsLoaded, loadLeadEmails]);
 
-  // Função para gerar contexto completo (sem truncamento) para sumarização
-  const getFullContext = useCallback((): string => {
+  // Obter contexto do lead para os prompts (completo, com compactação inteligente)
+  const getLeadContext = useCallback((): string => {
+    const MAX_CONTEXT_CHARS = 100000;
     const phone = getLeadPhone();
-    let context = `## Dados do Lead:\n`;
-    context += `- Nome: ${item.name || 'Não informado'}\n`;
-    context += `- Telefone: ${phone || 'Não informado'}\n`;
+    const sections: string[] = [];
 
-    // Adicionar todos os dados das colunas
+    // 1. Dados do Lead + colunas do Monday
+    let leadInfo = `## Dados do Lead:\n`;
+    leadInfo += `- Nome: ${item.name || 'Não informado'}\n`;
+    leadInfo += `- Telefone: ${phone || 'Não informado'}\n`;
     if (item.column_values) {
       item.column_values.forEach(col => {
         if (col.text && col.text.trim()) {
           const colTitle = columns.find(c => c.id === col.id)?.title || col.id;
-          context += `- ${colTitle}: ${col.text}\n`;
+          leadInfo += `- ${colTitle}: ${col.text}\n`;
         }
       });
     }
+    sections.push(leadInfo);
 
-    // Adicionar análise de documentos completa
-    if (documentAnalysis) {
-      context += `\n## Análise de Documentos do Monday:\n`;
-      if (documentAnalysis.checklist) {
-        context += `### Checklist:\n${documentAnalysis.checklist}\n`;
-      }
-      if (documentAnalysis.analise) {
-        context += `### Análise:\n${documentAnalysis.analise}\n`;
-      }
-    }
-
-    // Adicionar todos os documentos
-    if (leadDocuments.length > 0) {
-      context += `\n## Documentos do Lead (${leadDocuments.length} documentos):\n`;
-      leadDocuments.forEach((doc, idx) => {
-        const origin = doc.origin === 'email' ? 'Email' : 'Telefone';
-        const direction = doc.direction === 'sent' ? 'Enviado' : 'Recebido';
-        const subject = doc.metadata?.subject || 'Sem assunto';
-        context += `\n### Documento ${idx + 1} (${origin} - ${direction}):\n`;
-        context += `- Assunto: ${subject}\n`;
-        if (doc.text) {
-          context += `- Conteúdo: ${doc.text}\n`;
-        }
-        if (doc.images && doc.images.length > 0) {
-          doc.images.forEach((img, imgIdx) => {
-            if (img.extractedText) {
-              context += `- Arquivo ${imgIdx + 1} (transcrição): ${img.extractedText}\n`;
-            }
-          });
-        }
-      });
-    }
-
-    // Adicionar arquivos processados (file_processing_queue)
-    if (processedFiles.length > 0) {
-      context += `\n## Arquivos Processados (${processedFiles.length} arquivo(s)):\n`;
-      processedFiles.forEach((f, idx) => {
-        const text = f.extractedText.length > 500
-          ? f.extractedText.substring(0, 500) + '...[truncado]'
-          : f.extractedText;
-        context += `\n### Arquivo ${idx + 1}: ${f.fileName || 'sem nome'} (${f.mediaType})\n${text}\n`;
-      });
-    }
-
-    // Adicionar TODAS as mensagens do WhatsApp
+    // 2. Histórico COMPLETO de mensagens WhatsApp
     if (whatsappMessages.length > 0) {
-      context += `\n## Histórico COMPLETO de Conversa WhatsApp (${whatsappMessages.length} mensagens):\n`;
+      let msgSection = `\n## Histórico de Conversa WhatsApp (${whatsappMessages.length} mensagens):\n`;
       whatsappMessages.forEach((msg, idx) => {
         const sender = msg.source === 'Contact' ? 'Cliente' : 'Atendente';
         const time = msg.timestamp ? new Date(msg.timestamp).toLocaleString('pt-BR') : '';
-        context += `${idx + 1}. [${time}] ${sender}: ${msg.content}\n`;
+        msgSection += `${idx + 1}. [${time}] ${sender}: ${msg.content}\n`;
       });
+      sections.push(msgSection);
     }
 
-    // Adicionar updates do Monday
+    // 3. Updates do Monday (comentários)
     if (updates.length > 0) {
-      context += `\n## Updates do Monday (${updates.length}):\n`;
+      let updatesSection = `\n## Updates do Monday (${updates.length}):\n`;
       updates.forEach((update, idx) => {
         const creator = update.creator?.name || 'Desconhecido';
         const date = mondayService.formatDate(update.created_at);
         const body = mondayService.formatUpdateBody(update.body);
-        context += `${idx + 1}. [${date}] ${creator}: ${body}\n`;
+        updatesSection += `${idx + 1}. [${date}] ${creator}: ${body}\n`;
       });
+      sections.push(updatesSection);
     }
 
-    return context;
-  }, [item, columns, whatsappMessages, getLeadPhone, documentAnalysis, leadDocuments, processedFiles, updates]);
+    // 4. Análise de Documentos (completa)
+    if (documentAnalysis) {
+      let analysisSection = `\n## Análise de Documentos do Monday:\n`;
+      if (documentAnalysis.checklist) {
+        analysisSection += `### Checklist:\n${documentAnalysis.checklist}\n`;
+      }
+      if (documentAnalysis.analise) {
+        analysisSection += `### Análise:\n${documentAnalysis.analise}\n`;
+      }
+      sections.push(analysisSection);
+    }
+
+    // 5. Emails completos
+    if (leadEmails.length > 0) {
+      let emailSection = `\n## Emails (${leadEmails.length} encontrados):\n`;
+      leadEmails.forEach((email, idx) => {
+        emailSection += `\n### Email ${idx + 1}: ${email.subject || 'Sem assunto'}\n`;
+        if (email.from) emailSection += `De: ${email.from}\n`;
+        if (email.to) emailSection += `Para: ${email.to}\n`;
+        if (email.date || email.timestamp) emailSection += `Data: ${email.date || email.timestamp}\n`;
+        if (email.direction) emailSection += `Direção: ${email.direction === 'sent' ? 'Enviado' : 'Recebido'}\n`;
+        if (email.text) {
+          emailSection += `Conteúdo:\n${email.text}\n`;
+        }
+      });
+      sections.push(emailSection);
+    }
+
+    // 6. Documentos do Lead (todos, completos)
+    if (leadDocuments.length > 0) {
+      let docSection = `\n## Documentos do Lead (${leadDocuments.length} documentos):\n`;
+      leadDocuments.forEach((doc, idx) => {
+        const origin = doc.origin === 'email' ? 'Email' : 'Telefone';
+        const direction = doc.direction === 'sent' ? 'Enviado' : 'Recebido';
+        const subject = doc.metadata?.subject || 'Sem assunto';
+        docSection += `\n### Documento ${idx + 1} (${origin} - ${direction}):\n`;
+        docSection += `- Assunto: ${subject}\n`;
+        if (doc.text) {
+          docSection += `- Conteúdo: ${doc.text}\n`;
+        }
+        if (doc.images && doc.images.length > 0) {
+          doc.images.forEach((img, imgIdx) => {
+            if (img.extractedText) {
+              docSection += `- Arquivo ${imgIdx + 1} (transcrição): ${img.extractedText}\n`;
+            }
+          });
+        }
+      });
+      sections.push(docSection);
+    }
+
+    // 7. Arquivos processados (completos)
+    if (processedFiles.length > 0) {
+      let fileSection = `\n## Arquivos Processados (${processedFiles.length} arquivo(s)):\n`;
+      processedFiles.forEach((f, idx) => {
+        fileSection += `\n### Arquivo ${idx + 1}: ${f.fileName || 'sem nome'} (${f.mediaType})\n${f.extractedText}\n`;
+      });
+      sections.push(fileSection);
+    }
+
+    // Juntar e compactar se exceder limite
+    let fullContext = sections.join('\n');
+
+    if (fullContext.length > MAX_CONTEXT_CHARS) {
+      const overBy = fullContext.length - MAX_CONTEXT_CHARS;
+      let toTrim = overBy;
+      for (let i = sections.length - 1; i >= 1 && toTrim > 0; i--) {
+        const sectionLen = sections[i].length;
+        if (sectionLen > 500 && toTrim > 0) {
+          const trimTo = Math.max(500, sectionLen - toTrim);
+          const trimmed = sections[i].substring(0, trimTo) + '\n...[contexto compactado por limite]\n';
+          toTrim -= (sectionLen - trimmed.length);
+          sections[i] = trimmed;
+        }
+      }
+      fullContext = sections.join('\n');
+      if (fullContext.length > MAX_CONTEXT_CHARS) {
+        fullContext = fullContext.substring(0, MAX_CONTEXT_CHARS) + '\n...[contexto truncado]';
+      }
+    }
+
+    return fullContext;
+  }, [item, columns, whatsappMessages, getLeadPhone, documentAnalysis, leadDocuments, processedFiles, updates, leadEmails]);
 
   // Função para gerar o resumo do contexto
   const generateContextSummary = useCallback(async () => {
@@ -476,7 +523,7 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
     setSummaryError(null);
 
     try {
-      const fullContext = getFullContext();
+      const fullContext = getLeadContext();
 
       // Se o contexto for pequeno, não precisa sumarizar
       if (fullContext.length < 3000) {
@@ -523,7 +570,7 @@ ${fullContext}`;
     } finally {
       setGeneratingSummary(false);
     }
-  }, [contextSummary, generatingSummary, getFullContext]);
+  }, [contextSummary, generatingSummary, getLeadContext]);
 
   // Gerar resumo quando os dados estiverem carregados (para WhatsApp e Copilot)
   useEffect(() => {
@@ -566,6 +613,7 @@ ${fullContext}`;
       try {
         const allPrompts = await promptService.getPrompts();
         const promptMap = new Map(allPrompts.map(p => [p.id, p]));
+        allPromptsMapRef.current = promptMap;
 
         // IDs que são pai de alguém (não são folha)
         const parentIds = new Set(allPrompts.filter(p => p.parentId).map(p => p.parentId!));
@@ -595,99 +643,6 @@ ${fullContext}`;
     loadPrompts();
   }, []);
 
-  // Obter contexto do lead para os prompts
-  const getLeadContext = useCallback((): string => {
-    const phone = getLeadPhone();
-    let context = `## Dados do Lead:\n`;
-    context += `- Nome: ${item.name || 'Não informado'}\n`;
-    context += `- Telefone: ${phone || 'Não informado'}\n`;
-
-    // Adicionar dados das colunas
-    if (item.column_values) {
-      item.column_values.forEach(col => {
-        if (col.text && col.text.trim()) {
-          const colTitle = columns.find(c => c.id === col.id)?.title || col.id;
-          context += `- ${colTitle}: ${col.text}\n`;
-        }
-      });
-    }
-
-    // Adicionar análise de documentos (se disponível)
-    if (documentAnalysis) {
-      context += `\n## Análise de Documentos do Monday:\n`;
-      if (documentAnalysis.checklist) {
-        context += `### Checklist:\n${documentAnalysis.checklist}\n`;
-      }
-      if (documentAnalysis.analise) {
-        // Limitar análise a 2000 caracteres para não estourar contexto
-        const analysisText = documentAnalysis.analise.length > 2000
-          ? documentAnalysis.analise.substring(0, 2000) + '...[truncado]'
-          : documentAnalysis.analise;
-        context += `### Análise:\n${analysisText}\n`;
-      }
-    }
-
-    // Adicionar documentos (resumo)
-    if (leadDocuments.length > 0) {
-      context += `\n## Documentos do Lead (${leadDocuments.length} documentos):\n`;
-      // Limitar a 10 documentos mais recentes e 500 chars por documento
-      const recentDocs = leadDocuments.slice(0, 10);
-      recentDocs.forEach((doc, idx) => {
-        const origin = doc.origin === 'email' ? 'Email' : 'Telefone';
-        const direction = doc.direction === 'sent' ? 'Enviado' : 'Recebido';
-        const subject = doc.metadata?.subject || 'Sem assunto';
-        context += `\n### Documento ${idx + 1} (${origin} - ${direction}):\n`;
-        context += `- Assunto: ${subject}\n`;
-        if (doc.text) {
-          const docText = doc.text.length > 500
-            ? doc.text.substring(0, 500) + '...[truncado]'
-            : doc.text;
-          context += `- Conteúdo: ${docText}\n`;
-        }
-        // Adicionar texto extraído de imagens/PDFs
-        if (doc.images && doc.images.length > 0) {
-          doc.images.forEach((img, imgIdx) => {
-            if (img.extractedText) {
-              const extractedText = img.extractedText.length > 300
-                ? img.extractedText.substring(0, 300) + '...[truncado]'
-                : img.extractedText;
-              context += `- Arquivo ${imgIdx + 1} (transcrição): ${extractedText}\n`;
-            }
-          });
-        }
-      });
-    }
-
-    // Adicionar arquivos processados (file_processing_queue)
-    if (processedFiles.length > 0) {
-      context += `\n## Arquivos Processados (${processedFiles.length} arquivo(s)):\n`;
-      processedFiles.forEach((f, idx) => {
-        const text = f.extractedText.length > 500
-          ? f.extractedText.substring(0, 500) + '...[truncado]'
-          : f.extractedText;
-        context += `\n### Arquivo ${idx + 1}: ${f.fileName || 'sem nome'} (${f.mediaType})\n${text}\n`;
-      });
-    }
-
-    // Adicionar histórico de mensagens (últimas 50 mensagens)
-    if (whatsappMessages.length > 0) {
-      const messageLimit = 50;
-      const recentMessages = whatsappMessages.slice(-messageLimit);
-      context += `\n## Histórico de Conversa WhatsApp (${recentMessages.length} de ${whatsappMessages.length} mensagens):\n`;
-      recentMessages.forEach((msg, idx) => {
-        const sender = msg.source === 'Contact' ? 'Cliente' : 'Atendente';
-        const time = msg.timestamp ? new Date(msg.timestamp).toLocaleString('pt-BR') : '';
-        // Limitar cada mensagem a 500 chars
-        const content = msg.content && msg.content.length > 500
-          ? msg.content.substring(0, 500) + '...'
-          : msg.content;
-        context += `${idx + 1}. [${time}] ${sender}: ${content}\n`;
-      });
-    }
-
-    return context;
-  }, [item, columns, whatsappMessages, getLeadPhone, documentAnalysis, leadDocuments, processedFiles]);
-
   // Usar prompt para gerar resposta
   const handleUsePrompt = async (prompt: Prompt) => {
     const phone = getLeadPhone();
@@ -695,10 +650,20 @@ ${fullContext}`;
 
     setUsingPrompt(prompt.id);
     try {
-      // Usar o resumo pré-gerado se disponível, senão usar contexto truncado
       const leadContext = contextSummary || getLeadContext();
 
-      const systemContext = `${prompt.content}
+      // Concatenar cadeia de prompts pais (avô → pai → filho)
+      const promptChain: string[] = [];
+      let currentPrompt: Prompt | undefined = prompt;
+      while (currentPrompt) {
+        if (currentPrompt.content && currentPrompt.content.trim()) {
+          promptChain.unshift(currentPrompt.content.trim());
+        }
+        currentPrompt = currentPrompt.parentId ? allPromptsMapRef.current.get(currentPrompt.parentId) : undefined;
+      }
+      const fullPromptContent = promptChain.join('\n\n');
+
+      const systemContext = `${fullPromptContent}
 
 --- CONTEXTO DO LEAD ---
 ${leadContext}
@@ -768,7 +733,18 @@ Instruções:
     try {
       const leadContext = contextSummary || getLeadContext();
 
-      const systemContext = `${prompt.content}
+      // Concatenar cadeia de prompts pais (avô → pai → filho)
+      const promptChain: string[] = [];
+      let currentPrompt: Prompt | undefined = prompt;
+      while (currentPrompt) {
+        if (currentPrompt.content && currentPrompt.content.trim()) {
+          promptChain.unshift(currentPrompt.content.trim());
+        }
+        currentPrompt = currentPrompt.parentId ? allPromptsMapRef.current.get(currentPrompt.parentId) : undefined;
+      }
+      const fullPromptContent = promptChain.join('\n\n');
+
+      const systemContext = `${fullPromptContent}
 
 --- CONTEXTO DO LEAD ---
 ${leadContext}

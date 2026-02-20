@@ -390,7 +390,7 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
 
   // Obter contexto do lead para os prompts (completo, com compactação inteligente)
   const getLeadContext = useCallback((): string => {
-    const MAX_CONTEXT_CHARS = 100000;
+    const MAX_CONTEXT_CHARS = 350000; // ~87K tokens — Grok-4-fast suporta 131K tokens
     const phone = getLeadPhone();
     const sections: string[] = [];
 

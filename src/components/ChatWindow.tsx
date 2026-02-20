@@ -836,7 +836,7 @@ ${conversationHistory}`;
   const getLeadContext = async (): Promise<string> => {
     if (!selectedPhone) return '';
 
-    const MAX_CONTEXT_CHARS = 100000; // ~25K tokens — usar boa parte da janela do Grok
+    const MAX_CONTEXT_CHARS = 350000; // ~87K tokens — Grok-4-fast suporta 131K tokens
     const sections: string[] = [];
 
     // 1. Dados do Lead

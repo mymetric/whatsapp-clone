@@ -59,8 +59,10 @@ module.exports = async (req, res) => {
       const mockRes = {
         statusCode: 200,
         body: null,
+        _headers: {},
         status(code) { this.statusCode = code; return this; },
         json(data) { this.body = data; return this; },
+        setHeader(key, value) { this._headers[key] = value; return this; },
         end() { return this; },
       };
 

@@ -11,6 +11,15 @@ import './LeadDetailsPanel.css';
 
 const ATENDIMENTO_BOARD_ID = 607533664;
 
+interface FreshData {
+  messages: FirestoreMessage[];
+  docs: DocumentRecord[];
+  analysis: DocumentAnalysis | null;
+  files: Array<{id: string; fileName: string; mediaType: string; extractedText: string; processedAt: string}>;
+  emails: any[];
+  mondayUpdates: MondayUpdate[];
+}
+
 interface LeadDetailsPanelProps {
   item: MondayBoardItem;
   columns: any[];
@@ -388,11 +397,125 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
     }
   }, [activeTab, documentsLoaded, loadDocuments, emailsLoaded, loadLeadEmails]);
 
+  // Garante que WhatsApp, documentos e emails estão carregados e retorna dados frescos
+  const ensureDataLoaded = useCallback(async (): Promise<FreshData> => {
+    const phone = getLeadPhone();
+    const email = getLeadEmail();
+
+    let freshMessages = whatsappMessages;
+    let freshDocs = leadDocuments;
+    let freshAnalysis = documentAnalysis;
+    let freshFiles = processedFiles;
+    let freshEmails = leadEmails;
+
+    const promises: Promise<void>[] = [];
+
+    if (phone && !whatsappLoaded) {
+      promises.push(
+        firestoreMessagesService.getMessages(phone, 100).then(result => {
+          const sorted = [...result.messages].sort((a, b) => {
+            const dateA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+            const dateB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+            return dateA - dateB;
+          });
+          freshMessages = sorted;
+          setWhatsappMessages(sorted);
+          setWhatsappLoaded(true);
+        }).catch(err => console.error('Erro ao carregar WhatsApp:', err))
+      );
+    }
+
+    if (!documentsLoaded && phone) {
+      promises.push(
+        (async () => {
+          try {
+            const phoneObj = {
+              _id: phone,
+              email: item.column_values?.find(c => c.id?.toLowerCase().includes('email'))?.text || undefined,
+              pulse_id: !isOrphan ? item.id : undefined,
+            };
+            const [docs, analysis, processedRes] = await Promise.all([
+              documentService.getDocumentsForContact(phoneObj as any).catch(() => []),
+              phoneObj.pulse_id ? documentService.getDocumentAnalysis(phoneObj.pulse_id).catch(() => null) : Promise.resolve(null),
+              fetch(`/api/files/extracted-texts?phone=${encodeURIComponent(phone)}`).then(r => r.ok ? r.json() : []).catch(() => []),
+            ]);
+            freshDocs = docs;
+            freshAnalysis = analysis;
+            freshFiles = Array.isArray(processedRes) ? processedRes : [];
+            setLeadDocuments(freshDocs);
+            setDocumentAnalysis(freshAnalysis);
+            setProcessedFiles(freshFiles);
+            setDocumentsLoaded(true);
+          } catch (error) {
+            console.error('Erro ao carregar documentos:', error);
+            setDocumentsLoaded(true);
+          }
+        })()
+      );
+    }
+
+    if (!emailsLoaded && email) {
+      promises.push(
+        (async () => {
+          try {
+            const emailData = await emailService.getEmailByEmail(email);
+            if (emailData) {
+              let allEmails: any[] = [];
+              if (emailData._source === 'firestore' && emailData.emails) {
+                allEmails = emailData.emails;
+              } else {
+                if (emailData.destination && Array.isArray(emailData.destination)) {
+                  emailData.destination.forEach((e: any) => allEmails.push({ ...e, direction: 'received' }));
+                }
+                if (emailData.sender && Array.isArray(emailData.sender)) {
+                  emailData.sender.forEach((e: any) => allEmails.push({ ...e, direction: 'sent' }));
+                }
+                allEmails.sort((a, b) => {
+                  const dateA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+                  const dateB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+                  return dateB - dateA;
+                });
+              }
+              freshEmails = allEmails;
+              setLeadEmails(freshEmails);
+            }
+            setEmailsLoaded(true);
+          } catch (error) {
+            console.error('Erro ao carregar emails:', error);
+            setEmailsLoaded(true);
+          }
+        })()
+      );
+    }
+
+    if (promises.length > 0) {
+      await Promise.all(promises);
+    }
+
+    return {
+      messages: freshMessages,
+      docs: freshDocs,
+      analysis: freshAnalysis,
+      files: freshFiles,
+      emails: freshEmails,
+      mondayUpdates: updates,
+    };
+  }, [getLeadPhone, getLeadEmail, whatsappLoaded, documentsLoaded, emailsLoaded, item, isOrphan,
+      whatsappMessages, leadDocuments, documentAnalysis, processedFiles, leadEmails, updates]);
+
   // Obter contexto do lead para os prompts (completo, com compactação inteligente)
-  const getLeadContext = useCallback((): string => {
+  // Aceita dados frescos via parâmetro (de ensureDataLoaded) para evitar stale state
+  const getLeadContext = useCallback((freshData?: FreshData): string => {
     const MAX_CONTEXT_CHARS = 350000; // ~87K tokens — Grok-4-fast suporta 131K tokens
     const phone = getLeadPhone();
     const sections: string[] = [];
+
+    const msgs = freshData?.messages ?? whatsappMessages;
+    const mondayUpdates = freshData?.mondayUpdates ?? updates;
+    const docAnalysis = freshData?.analysis ?? documentAnalysis;
+    const emails = freshData?.emails ?? leadEmails;
+    const docs = freshData?.docs ?? leadDocuments;
+    const files = freshData?.files ?? processedFiles;
 
     // 1. Dados do Lead + colunas do Monday
     let leadInfo = `## Dados do Lead:\n`;
@@ -409,9 +532,9 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
     sections.push(leadInfo);
 
     // 2. Histórico COMPLETO de mensagens WhatsApp
-    if (whatsappMessages.length > 0) {
-      let msgSection = `\n## Histórico de Conversa WhatsApp (${whatsappMessages.length} mensagens):\n`;
-      whatsappMessages.forEach((msg, idx) => {
+    if (msgs.length > 0) {
+      let msgSection = `\n## Histórico de Conversa WhatsApp (${msgs.length} mensagens):\n`;
+      msgs.forEach((msg, idx) => {
         const sender = msg.source === 'Contact' ? 'Cliente' : 'Atendente';
         const time = msg.timestamp ? new Date(msg.timestamp).toLocaleString('pt-BR') : '';
         msgSection += `${idx + 1}. [${time}] ${sender}: ${msg.content}\n`;
@@ -420,9 +543,9 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
     }
 
     // 3. Updates do Monday (comentários)
-    if (updates.length > 0) {
-      let updatesSection = `\n## Updates do Monday (${updates.length}):\n`;
-      updates.forEach((update, idx) => {
+    if (mondayUpdates.length > 0) {
+      let updatesSection = `\n## Updates do Monday (${mondayUpdates.length}):\n`;
+      mondayUpdates.forEach((update, idx) => {
         const creator = update.creator?.name || 'Desconhecido';
         const date = mondayService.formatDate(update.created_at);
         const body = mondayService.formatUpdateBody(update.body);
@@ -432,21 +555,21 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
     }
 
     // 4. Análise de Documentos (completa)
-    if (documentAnalysis) {
+    if (docAnalysis) {
       let analysisSection = `\n## Análise de Documentos do Monday:\n`;
-      if (documentAnalysis.checklist) {
-        analysisSection += `### Checklist:\n${documentAnalysis.checklist}\n`;
+      if (docAnalysis.checklist) {
+        analysisSection += `### Checklist:\n${docAnalysis.checklist}\n`;
       }
-      if (documentAnalysis.analise) {
-        analysisSection += `### Análise:\n${documentAnalysis.analise}\n`;
+      if (docAnalysis.analise) {
+        analysisSection += `### Análise:\n${docAnalysis.analise}\n`;
       }
       sections.push(analysisSection);
     }
 
     // 5. Emails completos
-    if (leadEmails.length > 0) {
-      let emailSection = `\n## Emails (${leadEmails.length} encontrados):\n`;
-      leadEmails.forEach((email, idx) => {
+    if (emails.length > 0) {
+      let emailSection = `\n## Emails (${emails.length} encontrados):\n`;
+      emails.forEach((email, idx) => {
         emailSection += `\n### Email ${idx + 1}: ${email.subject || 'Sem assunto'}\n`;
         if (email.from) emailSection += `De: ${email.from}\n`;
         if (email.to) emailSection += `Para: ${email.to}\n`;
@@ -460,9 +583,9 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
     }
 
     // 6. Documentos do Lead (todos, completos)
-    if (leadDocuments.length > 0) {
-      let docSection = `\n## Documentos do Lead (${leadDocuments.length} documentos):\n`;
-      leadDocuments.forEach((doc, idx) => {
+    if (docs.length > 0) {
+      let docSection = `\n## Documentos do Lead (${docs.length} documentos):\n`;
+      docs.forEach((doc, idx) => {
         const origin = doc.origin === 'email' ? 'Email' : 'Telefone';
         const direction = doc.direction === 'sent' ? 'Enviado' : 'Recebido';
         const subject = doc.metadata?.subject || 'Sem assunto';
@@ -483,9 +606,9 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
     }
 
     // 7. Arquivos processados (completos)
-    if (processedFiles.length > 0) {
-      let fileSection = `\n## Arquivos Processados (${processedFiles.length} arquivo(s)):\n`;
-      processedFiles.forEach((f, idx) => {
+    if (files.length > 0) {
+      let fileSection = `\n## Arquivos Processados (${files.length} arquivo(s)):\n`;
+      files.forEach((f, idx) => {
         fileSection += `\n### Arquivo ${idx + 1}: ${f.fileName || 'sem nome'} (${f.mediaType})\n${f.extractedText}\n`;
       });
       sections.push(fileSection);
@@ -650,7 +773,9 @@ ${fullContext}`;
 
     setUsingPrompt(prompt.id);
     try {
-      const leadContext = getLeadContext();
+      // Garantir que todos os dados estão carregados e usar dados frescos
+      const freshData = await ensureDataLoaded();
+      const leadContext = getLeadContext(freshData);
 
       // Concatenar cadeia de prompts pais (avô → pai → filho)
       const promptChain: string[] = [];
@@ -678,8 +803,9 @@ Instruções:
 - Baseie sua resposta no contexto do lead e nas últimas mensagens da conversa
 - IMPORTANTE: Forneça respostas completas e detalhadas, mas NUNCA gere respostas com mais de 4000 caracteres.`;
 
-      const lastMessage = whatsappMessages.length > 0 ? whatsappMessages[whatsappMessages.length - 1].content : '';
-      const conversationHistory = whatsappMessages.slice(-10).map(msg =>
+      const msgs = freshData.messages;
+      const lastMessage = msgs.length > 0 ? msgs[msgs.length - 1].content : '';
+      const conversationHistory = msgs.slice(-10).map(msg =>
         `${msg.source === 'Contact' ? 'Cliente' : 'Atendente'}: ${msg.content}`
       ).join('\n');
 
@@ -731,7 +857,9 @@ Instruções:
     setGeneratingAnalysisPrompt(prompt.id);
     setAnalysisResult(null);
     try {
-      const leadContext = getLeadContext();
+      // Garantir que todos os dados estão carregados e usar dados frescos
+      const freshData = await ensureDataLoaded();
+      const leadContext = getLeadContext(freshData);
 
       // Concatenar cadeia de prompts pais (avô → pai → filho)
       const promptChain: string[] = [];

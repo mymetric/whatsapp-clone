@@ -12,7 +12,6 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 const AppContent: React.FC = () => {
   const [showPromptsPage, setShowPromptsPage] = useState(false);
   const [showContenciosoPage, setShowContenciosoPage] = useState(false);
-  const [showConversasLeadsPage, setShowConversasLeadsPage] = useState(true);
   const [showFileProcessingPage, setShowFileProcessingPage] = useState(false);
   const [showAdminPage, setShowAdminPage] = useState(false);
   const { isAuthenticated, hasPermission, user } = useAuth();
@@ -22,7 +21,6 @@ const AppContent: React.FC = () => {
   const resetAllPages = () => {
     setShowPromptsPage(false);
     setShowContenciosoPage(false);
-    setShowConversasLeadsPage(false);
     setShowFileProcessingPage(false);
     setShowAdminPage(false);
   };
@@ -47,7 +45,6 @@ const AppContent: React.FC = () => {
     onConversasLeadsClick: () => {
       if (!hasPermission('conversas-leads')) return;
       resetAllPages();
-      setShowConversasLeadsPage(true);
     },
     onFileProcessingClick: () => {
       if (!hasPermission('file-processing')) return;

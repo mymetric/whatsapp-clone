@@ -191,37 +191,42 @@ async function processQueueItem(db, itemId) {
   }
 }
 
-module.exports = async (req, res) => {
+// Busca próximo item queued e processa — retorna resultado sem depender de req/res
+async function processNextItem() {
+  const db = getDb();
+  if (!db) throw new Error('Firebase não configurado');
+
+  const now = new Date().toISOString();
+  const snapshot = await db
+    .collection('file_processing_queue')
+    .where('status', '==', 'queued')
+    .limit(50)
+    .get();
+
+  const candidates = snapshot.docs
+    .map(doc => ({ id: doc.id, ...doc.data() }))
+    .filter(item => !item.nextRetryAt || item.nextRetryAt <= now)
+    .sort((a, b) => (b.receivedAt || b.createdAt || '').localeCompare(a.receivedAt || a.createdAt || ''));
+
+  const nextItem = candidates.length > 0 ? candidates[0] : null;
+  if (!nextItem) return { processed: false };
+
+  const result = await processQueueItem(db, nextItem.id);
+  return { processed: true, itemId: nextItem.id, ...result };
+}
+
+const handler = async (req, res) => {
   setCors(res, 'POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const db = getDb();
-  if (!db) return res.status(500).json({ error: 'Firebase não configurado' });
-
   try {
-    const now = new Date().toISOString();
-
-    const snapshot = await db
-      .collection('file_processing_queue')
-      .where('status', '==', 'queued')
-      .limit(50)
-      .get();
-
-    const candidates = snapshot.docs
-      .map(doc => ({ id: doc.id, ...doc.data() }))
-      .filter(item => !item.nextRetryAt || item.nextRetryAt <= now)
-      .sort((a, b) => (b.receivedAt || b.createdAt || '').localeCompare(a.receivedAt || a.createdAt || ''));
-
-    const nextItem = candidates.length > 0 ? candidates[0] : null;
-
-    if (!nextItem) {
-      return res.json({ message: 'Nenhum item na fila para processar', processed: false });
-    }
-
-    const result = await processQueueItem(db, nextItem.id);
-    return res.json({ processed: true, itemId: nextItem.id, ...result });
+    const result = await processNextItem();
+    return res.json(result);
   } catch (err) {
     return res.status(500).json({ error: 'Erro ao processar', details: err.message });
   }
 };
+
+handler.processNextItem = processNextItem;
+module.exports = handler;

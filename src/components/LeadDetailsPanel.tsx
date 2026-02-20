@@ -107,6 +107,10 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
   const [leadEmails, setLeadEmails] = useState<any[]>([]);
   const [emailsLoading, setEmailsLoading] = useState(false);
   const [emailsLoaded, setEmailsLoaded] = useState(false);
+
+  // Estado do contexto (dados prontos para os prompts)
+  const [contextReady, setContextReady] = useState(false);
+  const [loadingContext, setLoadingContext] = useState(false);
   const [expandedEmails, setExpandedEmails] = useState<Set<string>>(new Set());
 
   // Verificar se é um item órfão (sem lead no Monday)
@@ -129,6 +133,8 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
     setContextSummary(null);
     setGeneratingSummary(false);
     setSummaryError(null);
+    setContextReady(false);
+    setLoadingContext(false);
     setNewMessage('');
     setShowMessageInput(false);
     setCopilotInput('');
@@ -502,6 +508,28 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
     };
   }, [getLeadPhone, getLeadEmail, whatsappLoaded, documentsLoaded, emailsLoaded, item, isOrphan,
       whatsappMessages, leadDocuments, documentAnalysis, processedFiles, leadEmails, updates]);
+
+  // Marcar contexto como pronto quando todos os dados carregaram
+  useEffect(() => {
+    if (whatsappLoaded && documentsLoaded && emailsLoaded) {
+      setContextReady(true);
+      setLoadingContext(false);
+    }
+  }, [whatsappLoaded, documentsLoaded, emailsLoaded]);
+
+  // Pré-carregar todos os dados para contexto ao abrir aba que precisa de prompts
+  useEffect(() => {
+    const needsPrompts = activeTab === 'whatsapp' || activeTab === 'documents';
+    if (needsPrompts && !contextReady && !loadingContext) {
+      setLoadingContext(true);
+      ensureDataLoaded().then(() => {
+        setContextReady(true);
+        setLoadingContext(false);
+      }).catch(() => {
+        setLoadingContext(false);
+      });
+    }
+  }, [activeTab, contextReady, loadingContext, ensureDataLoaded]);
 
   // Obter contexto do lead para os prompts (completo, com compactação inteligente)
   // Aceita dados frescos via parâmetro (de ensureDataLoaded) para evitar stale state
@@ -1404,29 +1432,36 @@ Instruções:
               <span className="documents-icon">🤖</span>
               <h4>Análise por IA</h4>
             </div>
-            <div className="analysis-prompts-grid" style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', padding: '8px 0' }}>
-              {analysisPrompts.map(prompt => (
-                <button
-                  key={prompt.id}
-                  onClick={() => handleUseAnalysisPrompt(prompt)}
-                  disabled={generatingAnalysisPrompt !== null}
-                  className="prompt-button"
-                  title={prompt.description || prompt.content?.substring(0, 100)}
-                  style={{
-                    padding: '6px 14px',
-                    borderRadius: '16px',
-                    border: '1px solid #d1d5db',
-                    background: generatingAnalysisPrompt === prompt.id ? '#e0e7ff' : '#f9fafb',
-                    cursor: generatingAnalysisPrompt ? 'not-allowed' : 'pointer',
-                    fontSize: '13px',
-                    color: '#374151',
-                    opacity: generatingAnalysisPrompt && generatingAnalysisPrompt !== prompt.id ? 0.5 : 1,
-                  }}
-                >
-                  {generatingAnalysisPrompt === prompt.id ? '⏳ Gerando...' : prompt.name}
-                </button>
-              ))}
-            </div>
+            {loadingContext ? (
+              <div className="prompts-loading-context">
+                <div className="prompt-loading-spinner"></div>
+                <span>Carregando contexto do lead...</span>
+              </div>
+            ) : (
+              <div className="analysis-prompts-grid" style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', padding: '8px 0' }}>
+                {analysisPrompts.map(prompt => (
+                  <button
+                    key={prompt.id}
+                    onClick={() => handleUseAnalysisPrompt(prompt)}
+                    disabled={generatingAnalysisPrompt !== null}
+                    className="prompt-button"
+                    title={prompt.description || prompt.content?.substring(0, 100)}
+                    style={{
+                      padding: '6px 14px',
+                      borderRadius: '16px',
+                      border: '1px solid #d1d5db',
+                      background: generatingAnalysisPrompt === prompt.id ? '#e0e7ff' : '#f9fafb',
+                      cursor: generatingAnalysisPrompt ? 'not-allowed' : 'pointer',
+                      fontSize: '13px',
+                      color: '#374151',
+                      opacity: generatingAnalysisPrompt && generatingAnalysisPrompt !== prompt.id ? 0.5 : 1,
+                    }}
+                  >
+                    {generatingAnalysisPrompt === prompt.id ? '⏳ Gerando...' : prompt.name}
+                  </button>
+                ))}
+              </div>
+            )}
 
             {/* Resultado da análise gerada */}
             {analysisResult && (
@@ -1769,23 +1804,30 @@ Instruções:
             <div className="prompts-header">
               <span className="prompts-label">Prompts:</span>
             </div>
-            <div className="prompts-list">
-              {prompts.map((prompt) => (
-                <div key={prompt.id} className="prompt-item">
-                  <button
-                    onClick={() => handleUsePrompt(prompt)}
-                    disabled={usingPrompt === prompt.id}
-                    className={`prompt-use-btn ${usingPrompt === prompt.id ? 'using' : ''}`}
-                    title={prompt.description || prompt.name}
-                  >
-                    {usingPrompt === prompt.id && (
-                      <div className="prompt-loading-spinner"></div>
-                    )}
-                    <span className="prompt-name">{prompt.name}</span>
-                  </button>
-                </div>
-              ))}
-            </div>
+            {loadingContext ? (
+              <div className="prompts-loading-context">
+                <div className="prompt-loading-spinner"></div>
+                <span>Carregando contexto do lead...</span>
+              </div>
+            ) : (
+              <div className="prompts-list">
+                {prompts.map((prompt) => (
+                  <div key={prompt.id} className="prompt-item">
+                    <button
+                      onClick={() => handleUsePrompt(prompt)}
+                      disabled={usingPrompt === prompt.id}
+                      className={`prompt-use-btn ${usingPrompt === prompt.id ? 'using' : ''}`}
+                      title={prompt.description || prompt.name}
+                    >
+                      {usingPrompt === prompt.id && (
+                        <div className="prompt-loading-spinner"></div>
+                      )}
+                      <span className="prompt-name">{prompt.name}</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 

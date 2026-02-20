@@ -455,6 +455,27 @@
   animation: spin 0.8s linear infinite;
 }
 
+.prompts-loading-context {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: #f0f4ff;
+  border: 1px solid #e0e7ff;
+  border-radius: 10px;
+  font-size: 13px;
+  color: #4338ca;
+  font-weight: 500;
+}
+
+.prompts-loading-context .prompt-loading-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #c7d2fe;
+  border-top-color: #4338ca;
+  flex-shrink: 0;
+}
+
 /* WhatsApp Input */
 .whatsapp-input-container {
   display: flex;

@@ -416,82 +416,97 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
 
     const promises: Promise<void>[] = [];
 
-    if (phone && !whatsappLoaded) {
-      promises.push(
-        firestoreMessagesService.getMessages(phone, 100).then(result => {
-          const sorted = [...result.messages].sort((a, b) => {
-            const dateA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
-            const dateB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
-            return dateA - dateB;
-          });
-          freshMessages = sorted;
-          setWhatsappMessages(sorted);
-          setWhatsappLoaded(true);
-        }).catch(err => console.error('Erro ao carregar WhatsApp:', err))
-      );
+    if (!whatsappLoaded) {
+      if (phone) {
+        promises.push(
+          firestoreMessagesService.getMessages(phone, 100).then(result => {
+            const sorted = [...result.messages].sort((a, b) => {
+              const dateA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+              const dateB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+              return dateA - dateB;
+            });
+            freshMessages = sorted;
+            setWhatsappMessages(sorted);
+            setWhatsappLoaded(true);
+          }).catch(err => {
+            console.error('Erro ao carregar WhatsApp:', err);
+            setWhatsappLoaded(true);
+          })
+        );
+      } else {
+        setWhatsappLoaded(true);
+      }
     }
 
-    if (!documentsLoaded && phone) {
-      promises.push(
-        (async () => {
-          try {
-            const phoneObj = {
-              _id: phone,
-              email: item.column_values?.find(c => c.id?.toLowerCase().includes('email'))?.text || undefined,
-              pulse_id: !isOrphan ? item.id : undefined,
-            };
-            const [docs, analysis, processedRes] = await Promise.all([
-              documentService.getDocumentsForContact(phoneObj as any).catch(() => []),
-              phoneObj.pulse_id ? documentService.getDocumentAnalysis(phoneObj.pulse_id).catch(() => null) : Promise.resolve(null),
-              fetch(`/api/files/extracted-texts?phone=${encodeURIComponent(phone)}`).then(r => r.ok ? r.json() : []).catch(() => []),
-            ]);
-            freshDocs = docs;
-            freshAnalysis = analysis;
-            freshFiles = Array.isArray(processedRes) ? processedRes : [];
-            setLeadDocuments(freshDocs);
-            setDocumentAnalysis(freshAnalysis);
-            setProcessedFiles(freshFiles);
-            setDocumentsLoaded(true);
-          } catch (error) {
-            console.error('Erro ao carregar documentos:', error);
-            setDocumentsLoaded(true);
-          }
-        })()
-      );
-    }
-
-    if (!emailsLoaded && email) {
-      promises.push(
-        (async () => {
-          try {
-            const emailData = await emailService.getEmailByEmail(email);
-            if (emailData) {
-              let allEmails: any[] = [];
-              if (emailData._source === 'firestore' && emailData.emails) {
-                allEmails = emailData.emails;
-              } else {
-                if (emailData.destination && Array.isArray(emailData.destination)) {
-                  emailData.destination.forEach((e: any) => allEmails.push({ ...e, direction: 'received' }));
-                }
-                if (emailData.sender && Array.isArray(emailData.sender)) {
-                  emailData.sender.forEach((e: any) => allEmails.push({ ...e, direction: 'sent' }));
-                }
-                allEmails.sort((a, b) => {
-                  const dateA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
-                  const dateB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
-                  return dateB - dateA;
-                });
-              }
-              freshEmails = allEmails;
-              setLeadEmails(freshEmails);
+    if (!documentsLoaded) {
+      if (phone) {
+        promises.push(
+          (async () => {
+            try {
+              const phoneObj = {
+                _id: phone,
+                email: item.column_values?.find(c => c.id?.toLowerCase().includes('email'))?.text || undefined,
+                pulse_id: !isOrphan ? item.id : undefined,
+              };
+              const [docs, analysis, processedRes] = await Promise.all([
+                documentService.getDocumentsForContact(phoneObj as any).catch(() => []),
+                phoneObj.pulse_id ? documentService.getDocumentAnalysis(phoneObj.pulse_id).catch(() => null) : Promise.resolve(null),
+                fetch(`/api/files/extracted-texts?phone=${encodeURIComponent(phone)}`).then(r => r.ok ? r.json() : []).catch(() => []),
+              ]);
+              freshDocs = docs;
+              freshAnalysis = analysis;
+              freshFiles = Array.isArray(processedRes) ? processedRes : [];
+              setLeadDocuments(freshDocs);
+              setDocumentAnalysis(freshAnalysis);
+              setProcessedFiles(freshFiles);
+              setDocumentsLoaded(true);
+            } catch (error) {
+              console.error('Erro ao carregar documentos:', error);
+              setDocumentsLoaded(true);
             }
-            setEmailsLoaded(true);
-          } catch (error) {
-            console.error('Erro ao carregar emails:', error);
-            setEmailsLoaded(true);
-          }
-        })()
-      );
+          })()
+        );
+      } else {
+        setDocumentsLoaded(true);
+      }
+    }
+
+    if (!emailsLoaded) {
+      if (email) {
+        promises.push(
+          (async () => {
+            try {
+              const emailData = await emailService.getEmailByEmail(email);
+              if (emailData) {
+                let allEmails: any[] = [];
+                if (emailData._source === 'firestore' && emailData.emails) {
+                  allEmails = emailData.emails;
+                } else {
+                  if (emailData.destination && Array.isArray(emailData.destination)) {
+                    emailData.destination.forEach((e: any) => allEmails.push({ ...e, direction: 'received' }));
+                  }
+                  if (emailData.sender && Array.isArray(emailData.sender)) {
+                    emailData.sender.forEach((e: any) => allEmails.push({ ...e, direction: 'sent' }));
+                  }
+                  allEmails.sort((a, b) => {
+                    const dateA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+                    const dateB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+                    return dateB - dateA;
+                  });
+                }
+                freshEmails = allEmails;
+                setLeadEmails(freshEmails);
+              }
+              setEmailsLoaded(true);
+            } catch (error) {
+              console.error('Erro ao carregar emails:', error);
+              setEmailsLoaded(true);
+            }
+          })()
+        );
+      } else {
+        setEmailsLoaded(true);
+      }
     }
 
     if (promises.length > 0) {
@@ -508,14 +523,6 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
     };
   }, [getLeadPhone, getLeadEmail, whatsappLoaded, documentsLoaded, emailsLoaded, item, isOrphan,
       whatsappMessages, leadDocuments, documentAnalysis, processedFiles, leadEmails, updates]);
-
-  // Marcar contexto como pronto quando todos os dados carregaram
-  useEffect(() => {
-    if (whatsappLoaded && documentsLoaded && emailsLoaded) {
-      setContextReady(true);
-      setLoadingContext(false);
-    }
-  }, [whatsappLoaded, documentsLoaded, emailsLoaded]);
 
   // Pré-carregar todos os dados para contexto ao abrir aba que precisa de prompts
   useEffect(() => {

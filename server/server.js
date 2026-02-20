@@ -3719,6 +3719,85 @@ app.listen(PORT, '0.0.0.0', () => {
       }
     })();
   }
+
+  // Background worker: processa fila automaticamente a cada 30s
+  const WORKER_INTERVAL = 30000;
+  const WORKER_CONCURRENCY = 3;
+  const WORKER_MAX_PER_CYCLE = 10;
+  let workerRunning = false;
+
+  const runBackgroundWorker = async () => {
+    if (workerRunning || !firestoreDb) return;
+    workerRunning = true;
+
+    try {
+      const snap = await firestoreDb.collection('file_processing_queue')
+        .where('status', '==', 'queued')
+        .limit(1)
+        .get();
+
+      if (snap.empty) {
+        workerRunning = false;
+        return;
+      }
+
+      let totalProcessed = 0;
+      let hasMore = true;
+
+      while (hasMore && totalProcessed < WORKER_MAX_PER_CYCLE) {
+        const batchSize = Math.min(WORKER_CONCURRENCY, WORKER_MAX_PER_CYCLE - totalProcessed);
+        const batchPromises = [];
+
+        for (let i = 0; i < batchSize; i++) {
+          batchPromises.push((async () => {
+            try {
+              const qSnap = await firestoreDb.collection('file_processing_queue')
+                .where('status', '==', 'queued')
+                .orderBy('createdAt', 'asc')
+                .limit(1)
+                .get();
+
+              if (qSnap.empty) return false;
+
+              const doc = qSnap.docs[0];
+              const item = doc.data();
+
+              if (!item.mediaUrl || _processingLock.has(doc.id)) return false;
+
+              _processingLock.add(doc.id);
+              try {
+                await processQueueItem(doc.id);
+                return true;
+              } finally {
+                _processingLock.delete(doc.id);
+              }
+            } catch (err) {
+              console.error(`⚠️ [Worker] Erro ao processar:`, err.message);
+              return false;
+            }
+          })());
+        }
+
+        const results = await Promise.all(batchPromises);
+        const batchProcessed = results.filter(Boolean).length;
+        totalProcessed += batchProcessed;
+        hasMore = batchProcessed > 0;
+      }
+
+      if (totalProcessed > 0) {
+        console.log(`🔄 [Worker] Processados ${totalProcessed} itens da fila`);
+      }
+    } catch (err) {
+      console.error('⚠️ [Worker] Erro no background worker:', err.message);
+    } finally {
+      workerRunning = false;
+    }
+  };
+
+  setInterval(runBackgroundWorker, WORKER_INTERVAL);
+  // Primeira execução após 5s
+  setTimeout(runBackgroundWorker, 5000);
+  console.log(`🔄 Background worker ativo: processando fila a cada ${WORKER_INTERVAL / 1000}s`);
 });
 
 

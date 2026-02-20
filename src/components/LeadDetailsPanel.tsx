@@ -1439,7 +1439,7 @@ Instruções:
               <span className="documents-icon">🤖</span>
               <h4>Análise por IA</h4>
             </div>
-            {loadingContext ? (
+            {!contextReady ? (
               <div className="prompts-loading-context">
                 <div className="prompt-loading-spinner"></div>
                 <span>Carregando contexto do lead...</span>
@@ -1811,7 +1811,7 @@ Instruções:
             <div className="prompts-header">
               <span className="prompts-label">Prompts:</span>
             </div>
-            {loadingContext ? (
+            {!contextReady ? (
               <div className="prompts-loading-context">
                 <div className="prompt-loading-spinner"></div>
                 <span>Carregando contexto do lead...</span>

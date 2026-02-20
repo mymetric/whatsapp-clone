@@ -650,7 +650,7 @@ ${fullContext}`;
 
     setUsingPrompt(prompt.id);
     try {
-      const leadContext = contextSummary || getLeadContext();
+      const leadContext = getLeadContext();
 
       // Concatenar cadeia de prompts pais (avô → pai → filho)
       const promptChain: string[] = [];
@@ -731,7 +731,7 @@ Instruções:
     setGeneratingAnalysisPrompt(prompt.id);
     setAnalysisResult(null);
     try {
-      const leadContext = contextSummary || getLeadContext();
+      const leadContext = getLeadContext();
 
       // Concatenar cadeia de prompts pais (avô → pai → filho)
       const promptChain: string[] = [];

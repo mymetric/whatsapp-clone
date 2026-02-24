@@ -3942,7 +3942,11 @@ app.listen(PORT, '0.0.0.0', () => {
               const doc = qSnap.docs[0];
               const item = doc.data();
 
-              if (!item.mediaUrl || _processingLock.has(doc.id)) return false;
+              if (_processingLock.has(doc.id)) return false;
+              if (!item.mediaUrl) {
+                await doc.ref.update({ status: 'error', error: 'mediaUrl não encontrada no webhook', processedAt: new Date().toISOString() });
+                return true; // conta como processado para avançar na fila
+              }
 
               _processingLock.add(doc.id);
               try {

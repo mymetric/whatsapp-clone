@@ -11,6 +11,10 @@ function loadMondayApiKey() {
 }
 
 module.exports = async (req, res) => {
+  // Variáveis fora do try para acesso no catch (retorno parcial)
+  let allItems = [];
+  let boardColumns = null;
+
   // Garantir que sempre retornamos uma resposta
   try {
     // CORS headers
@@ -153,14 +157,14 @@ module.exports = async (req, res) => {
       }
     `;
 
-    const allItems = [];
+    allItems = [];
     const seenIds = new Set();
     let cursor = null;
     let page = 0;
     const MAX_PAGES = 10; // Reduzir para evitar timeout (10 páginas = 5000 itens máximo)
     const startTime = Date.now();
     const MAX_EXECUTION_TIME = 50000; // 50 segundos máximo de execução
-    let boardColumns = null;
+    boardColumns = null;
     let hasMore = false;
 
     while (page < MAX_PAGES) {
@@ -186,6 +190,7 @@ module.exports = async (req, res) => {
         `📄 [server] Página ${page} (limit=${PAGE_LIMIT})` + (cursor ? ' (cursor presente)' : ''),
       );
 
+      const pageTimeout = Math.max(15000, MAX_EXECUTION_TIME - (Date.now() - startTime));
       const response = await axios.post(
         'https://api.monday.com/v2',
         { query, variables },
@@ -194,7 +199,7 @@ module.exports = async (req, res) => {
             'Content-Type': 'application/json',
             Authorization: apiKey,
           },
-          timeout: 55000, // 55 segundos de timeout por requisição
+          timeout: pageTimeout,
         },
       );
 
@@ -258,30 +263,25 @@ module.exports = async (req, res) => {
       totalLoaded: allItems.length
     });
   } catch (err) {
-    console.error('❌ [server] Erro ao processar requisição:', err);
-    console.error('❌ Erro name:', err.name);
-    console.error('❌ Erro message:', err.message);
-    console.error('❌ Erro stack:', err.stack);
+    console.error('❌ [server] Erro ao processar requisição:', err.message);
 
-    // Garantir que sempre retornamos uma resposta
-    try {
-      const status = err.response?.status || 500;
-      const errorMessage = err.response?.data || err.message || 'Erro desconhecido';
-
-      return res.status(status).json({
-        error: 'Erro ao consultar board no Monday',
-        details: typeof errorMessage === 'string' ? errorMessage : JSON.stringify(errorMessage),
-        type: err.name || 'Error'
+    // Se já coletamos itens, retornar dados parciais ao invés de erro
+    if (allItems.length > 0) {
+      console.log(`⚠️ Retornando ${allItems.length} itens parciais após erro: ${err.message}`);
+      return res.json({
+        columns: boardColumns || [],
+        items: allItems,
+        hasMore: true,
+        totalLoaded: allItems.length,
+        partial: true,
       });
-    } catch (responseError) {
-      console.error('❌ Erro ao enviar resposta de erro:', responseError);
-      // Última tentativa - enviar resposta simples
-      try {
-        return res.status(500).send('Erro interno do servidor');
-      } catch (finalError) {
-        console.error('❌ Falha total ao enviar resposta:', finalError);
-        // Se tudo falhar, não há nada mais que possamos fazer
-      }
     }
+
+    const status = err.response?.status || 500;
+    return res.status(status).json({
+      error: 'Erro ao consultar board no Monday',
+      details: err.message || 'Erro desconhecido',
+      type: err.name || 'Error'
+    });
   }
 };

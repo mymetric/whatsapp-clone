@@ -129,7 +129,15 @@ async function processQueueItem(db, itemId) {
       }
     }
 
-    if (!mediaUrl) throw new Error('mediaUrl não encontrada');
+    if (!mediaUrl) {
+      // Marcar como erro permanente para não travar a fila retentando infinitamente
+      await queueRef.update({
+        status: 'error',
+        error: 'mediaUrl não encontrada no webhook',
+        processedAt: new Date().toISOString(),
+      });
+      return { success: false, extractedText: '', processingMethod: 'skipped-no-url' };
+    }
 
     // Download
     console.log(`Baixando: ${mediaUrl}`);

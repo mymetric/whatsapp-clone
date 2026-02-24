@@ -34,6 +34,7 @@ module.exports = async (req, res) => {
       if (messageType === 'Text' || !messageType) continue;
 
       const mediaUrl = msgFile.Url || lmFile.Url || null;
+      if (!mediaUrl) continue; // Webhook de status/leitura sem URL do arquivo
       const mimeType = msgFile.ContentType || lmFile.ContentType || '';
       const fileName = msgFile.OriginalName || lmFile.OriginalName || `file_${doc.id}`;
       const contactPhone = (content.Contact || data.Contact || {}).PhoneNumber || '';

@@ -104,6 +104,11 @@ module.exports = async (req, res) => {
           continue;
         }
 
+        if (!mediaUrl) {
+          results.push({ webhookId, error: 'Webhook sem URL de mídia' });
+          continue;
+        }
+
         let mediaType = classifyMediaType(mimeType);
         if (messageType === 'Audio') mediaType = 'audio';
         if (messageType === 'Image') mediaType = 'image';

@@ -17,6 +17,7 @@ type SectionType =
   | 'documents'
   | 'processed_files';
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 interface ContextSection {
   id: string;
   type: SectionType;
@@ -106,6 +107,7 @@ function extractFactualLines(text: string): string[] {
 // Email chain detection & signature removal
 // ============================================================================
 
+// eslint-disable-next-line no-useless-escape
 const EMAIL_CHAIN_PATTERN = /^(Em|On|De:)\s+\d{1,2}[\/.]\d{1,2}[\/.]\d{2,4}.*escreveu:?/im;
 const SIGNATURE_PATTERNS = [
   /^--\s*$/m,

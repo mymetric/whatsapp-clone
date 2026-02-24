@@ -78,15 +78,13 @@ const AppContent: React.FC = () => {
   }
 
   return (
-    <>
-      <div className="app fade-in">
-        <Header activeTab={activeTab} {...headerProps} />
-        <div className="prompts-page-container">
-          {pageContent}
-        </div>
+    <div className="app fade-in">
+      <Header activeTab={activeTab} {...headerProps} />
+      <div className="prompts-page-container">
+        {pageContent}
       </div>
       <ErrorReportWidget />
-    </>
+    </div>
   );
 };
 

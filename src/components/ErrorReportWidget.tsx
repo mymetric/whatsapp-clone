@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import ReactDOM from 'react-dom';
 import { apiFetch } from '../services/apiClient';
+import { useCurrentLead } from '../contexts/CurrentLeadContext';
 import './ErrorReportWidget.css';
 
 interface ErrorReport {
@@ -11,10 +12,10 @@ interface ErrorReport {
 }
 
 const ErrorReportWidget: React.FC = () => {
+  const { currentLead } = useCurrentLead();
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<ErrorReport[]>([]);
   const [input, setInput] = useState('');
-  const [leadId, setLeadId] = useState('');
   const [sending, setSending] = useState(false);
   const [hasNewResponse, setHasNewResponse] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
@@ -31,7 +32,7 @@ const ErrorReportWidget: React.FC = () => {
       setMessages([{
         id: 'welcome',
         role: 'system',
-        content: 'Descreva o erro que encontrou. Se possivel, informe o nome ou ID do lead associado no campo abaixo.',
+        content: 'Descreva o erro que encontrou. O lead aberto sera associado automaticamente.',
         timestamp: new Date(),
       }]);
     }
@@ -48,7 +49,6 @@ const ErrorReportWidget: React.FC = () => {
     };
     setMessages(prev => [...prev, userMsg]);
     const errorDescription = input.trim();
-    const associatedLead = leadId.trim();
     setInput('');
     setSending(true);
 
@@ -57,7 +57,8 @@ const ErrorReportWidget: React.FC = () => {
         method: 'POST',
         body: JSON.stringify({
           description: errorDescription,
-          leadId: associatedLead || null,
+          leadId: currentLead?.id || null,
+          leadName: currentLead?.name || null,
           url: window.location.href,
           userAgent: navigator.userAgent,
         }),
@@ -67,10 +68,9 @@ const ErrorReportWidget: React.FC = () => {
         setMessages(prev => [...prev, {
           id: `sys_${Date.now()}`,
           role: 'system',
-          content: 'Erro registrado com sucesso! Vamos analisar o mais breve possivel. Pode enviar mais detalhes se quiser.',
+          content: `Erro registrado com sucesso!${currentLead ? ` (Lead: ${currentLead.name})` : ''} Vamos analisar o mais breve possivel.`,
           timestamp: new Date(),
         }]);
-        setLeadId('');
       } else {
         throw new Error('Falha ao enviar');
       }
@@ -140,13 +140,11 @@ const ErrorReportWidget: React.FC = () => {
             </div>
 
             <div className="error-report-input-area">
-              <input
-                type="text"
-                className="error-report-lead-input"
-                value={leadId}
-                onChange={e => setLeadId(e.target.value)}
-                placeholder="Lead associado (nome ou ID, opcional)"
-              />
+              {currentLead && (
+                <div className="error-report-lead-badge">
+                  Lead: <strong>{currentLead.name}</strong>
+                </div>
+              )}
               <div className="error-report-input-row">
                 <textarea
                   value={input}

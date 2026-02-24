@@ -3828,7 +3828,7 @@ app.post('/api/error-reports', requireAuth, async (req, res) => {
       return res.status(500).json({ error: 'Firebase nao configurado' });
     }
 
-    const { description, leadId, url, userAgent } = req.body || {};
+    const { description, leadId, leadName, url, userAgent } = req.body || {};
     if (!description || typeof description !== 'string' || !description.trim()) {
       return res.status(400).json({ error: 'description e obrigatorio' });
     }
@@ -3836,6 +3836,7 @@ app.post('/api/error-reports', requireAuth, async (req, res) => {
     const report = {
       description: description.trim(),
       leadId: leadId || null,
+      leadName: leadName || null,
       url: url || null,
       userAgent: userAgent || null,
       reportedBy: req.user?.email || 'unknown',

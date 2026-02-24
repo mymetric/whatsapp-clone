@@ -8,6 +8,7 @@ import ConversasLeadsTab from './components/ConversasLeadsTab';
 import FileProcessingTab from './components/FileProcessingTab';
 import AdminPanel from './components/AdminPanel';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { CurrentLeadProvider } from './contexts/CurrentLeadContext';
 import ErrorReportWidget from './components/ErrorReportWidget';
 
 const AppContent: React.FC = () => {
@@ -91,7 +92,9 @@ const AppContent: React.FC = () => {
 function App() {
   return (
     <AuthProvider>
-      <AppContent />
+      <CurrentLeadProvider>
+        <AppContent />
+      </CurrentLeadProvider>
     </AuthProvider>
   );
 }

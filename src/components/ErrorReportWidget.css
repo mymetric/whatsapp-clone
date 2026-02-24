@@ -174,24 +174,17 @@
   background: #f8fafc;
 }
 
-.error-report-lead-input {
-  width: 100%;
-  padding: 6px 10px;
-  border: 1px solid #e2e8f0;
+.error-report-lead-badge {
+  padding: 4px 10px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
   border-radius: 6px;
-  font-size: 0.75rem;
-  color: #475569;
-  outline: none;
+  font-size: 0.72rem;
+  color: #166534;
   margin-bottom: 8px;
-  background: white;
-}
-
-.error-report-lead-input:focus {
-  border-color: #ef4444;
-}
-
-.error-report-lead-input::placeholder {
-  color: #94a3b8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .error-report-input-row {

@@ -8,6 +8,7 @@ import { promptService, Prompt, documentService, DocumentAnalysis, emailService 
 import { DocumentRecord } from '../types';
 import { grokService } from '../services/grokService';
 import { contextCompactionService, UseCase, AdHocFile, ContextStats } from '../services/contextCompactionService';
+import { useCurrentLead } from '../contexts/CurrentLeadContext';
 import './LeadDetailsPanel.css';
 
 const ATENDIMENTO_BOARD_ID = 607533664;
@@ -40,6 +41,7 @@ interface CopilotMessage {
 }
 
 const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boardId, onClose, onLeadCreated, defaultTab = 'whatsapp' }) => {
+  const { setCurrentLead } = useCurrentLead();
   const [activeTab, setActiveTab] = useState<TabType>(defaultTab);
   const [updates, setUpdates] = useState<MondayUpdate[]>([]);
   const [loadingUpdates, setLoadingUpdates] = useState(false);
@@ -143,6 +145,12 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
     setShowContextDetails(false);
     setActiveTab('whatsapp');
   }, [item.id]);
+
+  // Registrar lead atual no contexto global (para o widget de erro)
+  useEffect(() => {
+    setCurrentLead({ id: item.id, name: item.name });
+    return () => setCurrentLead(null);
+  }, [item.id, item.name, setCurrentLead]);
 
   const handleClose = useCallback(() => {
     onClose();

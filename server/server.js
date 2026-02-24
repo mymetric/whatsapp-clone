@@ -3734,6 +3734,61 @@ if (mondayKey && grokKey) {
   console.log('✅ Variáveis de ambiente (.env) carregadas com sucesso');
 }
 
+// ============================================================================
+// Error Reports
+// ============================================================================
+
+app.post('/api/error-reports', requireAuth, async (req, res) => {
+  try {
+    if (!firestoreDb) {
+      return res.status(500).json({ error: 'Firebase nao configurado' });
+    }
+
+    const { description, leadId, url, userAgent } = req.body || {};
+    if (!description || typeof description !== 'string' || !description.trim()) {
+      return res.status(400).json({ error: 'description e obrigatorio' });
+    }
+
+    const report = {
+      description: description.trim(),
+      leadId: leadId || null,
+      url: url || null,
+      userAgent: userAgent || null,
+      reportedBy: req.user?.email || 'unknown',
+      reportedByName: req.user?.name || 'unknown',
+      status: 'open',
+      createdAt: new Date().toISOString(),
+    };
+
+    const docRef = await firestoreDb.collection('error_reports').add(report);
+    console.log(`🐛 [ErrorReport] Novo erro reportado por ${report.reportedBy}: "${description.substring(0, 80)}..." (id: ${docRef.id})`);
+
+    return res.json({ success: true, id: docRef.id });
+  } catch (err) {
+    console.error('❌ [ErrorReport] Erro ao salvar report:', err.message);
+    return res.status(500).json({ error: 'Erro ao salvar report' });
+  }
+});
+
+app.get('/api/error-reports', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    if (!firestoreDb) {
+      return res.status(500).json({ error: 'Firebase nao configurado' });
+    }
+
+    const snapshot = await firestoreDb.collection('error_reports')
+      .orderBy('createdAt', 'desc')
+      .limit(100)
+      .get();
+
+    const reports = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    return res.json({ reports });
+  } catch (err) {
+    console.error('❌ [ErrorReport] Erro ao listar reports:', err.message);
+    return res.status(500).json({ error: 'Erro ao listar reports' });
+  }
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Servidor backend rodando em http://0.0.0.0:${PORT}`);
   console.log(`📁 Carregando variáveis de ambiente de: .env`);

@@ -8,6 +8,7 @@ import ConversasLeadsTab from './components/ConversasLeadsTab';
 import FileProcessingTab from './components/FileProcessingTab';
 import AdminPanel from './components/AdminPanel';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import ErrorReportWidget from './components/ErrorReportWidget';
 
 const AppContent: React.FC = () => {
   const [showPromptsPage, setShowPromptsPage] = useState(false);
@@ -59,57 +60,33 @@ const AppContent: React.FC = () => {
     return <Login />;
   }
 
+  let activeTab: 'conversas-leads' | 'file-processing' | 'contencioso' | 'prompts' | 'admin' = 'conversas-leads';
+  let pageContent: React.ReactNode = <ConversasLeadsTab />;
+
   if (showAdminPage) {
-    return (
-      <div className="app fade-in">
-        <Header activeTab="admin" {...headerProps} />
-        <div className="prompts-page-container">
-          <AdminPanel />
-        </div>
-      </div>
-    );
-  }
-
-  if (showFileProcessingPage) {
-    return (
-      <div className="app fade-in">
-        <Header activeTab="file-processing" {...headerProps} />
-        <div className="prompts-page-container">
-          <FileProcessingTab />
-        </div>
-      </div>
-    );
-  }
-
-  if (showPromptsPage) {
-    return (
-      <div className="app fade-in">
-        <Header activeTab="prompts" {...headerProps} />
-        <div className="prompts-page-container">
-          <PromptsManager onClose={() => setShowPromptsPage(false)} />
-        </div>
-      </div>
-    );
-  }
-
-  if (showContenciosoPage) {
-    return (
-      <div className="app fade-in">
-        <Header activeTab="contencioso" {...headerProps} />
-        <div className="prompts-page-container">
-          <ContenciosoTab />
-        </div>
-      </div>
-    );
+    activeTab = 'admin';
+    pageContent = <AdminPanel />;
+  } else if (showFileProcessingPage) {
+    activeTab = 'file-processing';
+    pageContent = <FileProcessingTab />;
+  } else if (showPromptsPage) {
+    activeTab = 'prompts';
+    pageContent = <PromptsManager onClose={() => setShowPromptsPage(false)} />;
+  } else if (showContenciosoPage) {
+    activeTab = 'contencioso';
+    pageContent = <ContenciosoTab />;
   }
 
   return (
-    <div className="app fade-in">
-      <Header activeTab="conversas-leads" {...headerProps} />
-      <div className="prompts-page-container">
-        <ConversasLeadsTab />
+    <>
+      <div className="app fade-in">
+        <Header activeTab={activeTab} {...headerProps} />
+        <div className="prompts-page-container">
+          {pageContent}
+        </div>
       </div>
-    </div>
+      <ErrorReportWidget />
+    </>
   );
 };
 

@@ -28,7 +28,7 @@ module.exports = async (req, res) => {
     });
   }
 
-  const { phone, message } = req.body || {};
+  const { phone, message, channel_phone } = req.body || {};
 
   if (!phone || typeof phone !== 'string') {
     return res.status(400).json({ error: 'phone é obrigatório (string)' });
@@ -41,6 +41,7 @@ module.exports = async (req, res) => {
     console.log('📤 [api/send-message] Proxy envio mensagem:', {
       phone,
       messageLength: message.length,
+      channel_phone: channel_phone || null,
       upstreamHost: (() => {
         try {
           return new URL(sendMessageUrl).host;
@@ -52,7 +53,7 @@ module.exports = async (req, res) => {
 
     const upstream = await axios.post(
       sendMessageUrl,
-      { phone, message },
+      { phone, message, channel_phone: channel_phone || null },
       {
         headers: {
           'Content-Type': 'application/json',

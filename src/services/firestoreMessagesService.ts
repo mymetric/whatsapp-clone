@@ -11,11 +11,13 @@ export interface FirestoreMessage {
   name: string;
   source: 'Contact' | 'Bot' | string;
   timestamp: string | null;
+  channel_phone?: string;
 }
 
 export interface MessagesResponse {
   messages: FirestoreMessage[];
   count: number;
+  channel_phone?: string | null;
 }
 
 export const firestoreMessagesService = {

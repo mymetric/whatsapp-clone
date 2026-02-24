@@ -38,6 +38,7 @@ const LeadDetailsModal: React.FC<LeadDetailsModalProps> = ({ item, columns, boar
   const [newMessage, setNewMessage] = useState('');
   const [showMessageInput, setShowMessageInput] = useState(false);
   const [sendingMessage, setSendingMessage] = useState(false);
+  const [conversationChannelPhone, setConversationChannelPhone] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -140,6 +141,7 @@ const LeadDetailsModal: React.FC<LeadDetailsModalProps> = ({ item, columns, boar
         return dateA - dateB;
       });
       setWhatsappMessages(sortedMessages);
+      setConversationChannelPhone(result.channel_phone || null);
       setWhatsappLoaded(true);
       if (result.messages.length === 0) {
         setWhatsappError('Nenhuma mensagem encontrada para este telefone');
@@ -352,7 +354,7 @@ Instruções:
     try {
       // Enviar mensagem via API - adicionar código do país se não tiver
       const phoneToSend = phone.startsWith('+') ? phone : `+${phone}`;
-      const result = await messageService.sendMessage(phoneToSend, messageText);
+      const result = await messageService.sendMessage(phoneToSend, messageText, conversationChannelPhone);
 
       if (result.success) {
         console.log('Mensagem enviada com sucesso');

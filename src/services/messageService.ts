@@ -1,6 +1,7 @@
 interface SendMessageRequest {
   phone: string;
   message: string;
+  channel_phone?: string | null;
 }
 
 interface SendMessageResponse {
@@ -10,11 +11,12 @@ interface SendMessageResponse {
 }
 
 class MessageService {
-  async sendMessage(phone: string, message: string): Promise<SendMessageResponse> {
+  async sendMessage(phone: string, message: string, channelPhone?: string | null): Promise<SendMessageResponse> {
     try {
       const requestData: SendMessageRequest = {
         phone: phone,
-        message: message
+        message: message,
+        channel_phone: channelPhone || null,
       };
 
       // Sempre usar proxy same-origin para evitar CORS em produção

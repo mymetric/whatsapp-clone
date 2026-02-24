@@ -148,7 +148,28 @@ module.exports = async (req, res) => {
 
     console.log(`✅ [server] Encontradas ${allMessages.length} mensagens para ${normalizedPhone}`);
 
-    return res.json({ messages: allMessages, count: allMessages.length });
+    // Buscar channel_phone do webhook mais recente para este contato
+    let conversationChannelPhone = null;
+    try {
+      const webhooksRef = firestoreDb.collection('umbler_webhooks');
+      for (const variant of variants) {
+        const whSnap = await webhooksRef
+          .where('Payload.Content.Contact.PhoneNumber', '==', '+' + variant)
+          .orderBy('_receivedAt', 'desc')
+          .limit(1)
+          .get();
+        if (!whSnap.empty) {
+          const whData = whSnap.docs[0].data();
+          const chPhone = ((whData.Payload?.Content?.Channel?.PhoneNumber) || '').replace(/\D/g, '');
+          if (chPhone) conversationChannelPhone = chPhone;
+          break;
+        }
+      }
+    } catch (whErr) {
+      console.warn('⚠️ [server] Erro ao buscar channel_phone de webhooks:', whErr.message);
+    }
+
+    return res.json({ messages: allMessages, count: allMessages.length, channel_phone: conversationChannelPhone });
   } catch (err) {
     console.error('❌ [server] Erro ao buscar mensagens do Firestore:', err);
     return res.status(500).json({

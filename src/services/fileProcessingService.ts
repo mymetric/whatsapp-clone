@@ -103,6 +103,13 @@ export const fileProcessingService = {
     return data.items || [];
   },
 
+  async getQueueKeys(): Promise<Array<{ webhookId: string; webhookSource: string; attachmentIndex: number | null }>> {
+    const res = await fetch(`${SERVER_BASE}/api/files/queue-keys`, { headers: getAuthHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    return data.keys || [];
+  },
+
   async enqueue(webhookIds: string[], source?: 'umbler' | 'email', attachmentIndex?: number): Promise<EnqueueResult[]> {
     const body: Record<string, unknown> = { webhookIds };
     if (source) body.source = source;

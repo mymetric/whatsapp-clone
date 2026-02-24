@@ -26,6 +26,7 @@ interface LiveEvent {
 const FileProcessingTab: React.FC = () => {
   // State
   const [queueItems, setQueueItems] = useState<FileProcessingItem[]>([]);
+  const [allQueueKeys, setAllQueueKeys] = useState<Set<string>>(new Set());
   const [mediaWebhooks, setMediaWebhooks] = useState<MediaWebhook[]>([]);
   const [selectedItem, setSelectedItem] = useState<FileProcessingItem | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('available');
@@ -84,11 +85,25 @@ const FileProcessingTab: React.FC = () => {
     }
   }, []);
 
+  const loadQueueKeys = useCallback(async () => {
+    try {
+      const keys = await fileProcessingService.getQueueKeys();
+      const keySet = new Set(keys.map(k =>
+        k.webhookSource === 'email' && k.attachmentIndex !== null
+          ? `${k.webhookId}_att${k.attachmentIndex}`
+          : k.webhookId
+      ));
+      setAllQueueKeys(keySet);
+    } catch (err) {
+      console.error('Erro ao carregar chaves da fila:', err);
+    }
+  }, []);
+
   const loadAll = useCallback(async () => {
     setLoading(true);
-    await Promise.all([loadQueue(), loadMediaWebhooks()]);
+    await Promise.all([loadQueue(), loadMediaWebhooks(), loadQueueKeys()]);
     setLoading(false);
-  }, [loadQueue, loadMediaWebhooks]);
+  }, [loadQueue, loadMediaWebhooks, loadQueueKeys]);
 
   useEffect(() => {
     loadAll();
@@ -108,16 +123,23 @@ const FileProcessingTab: React.FC = () => {
 
       try {
         // Buscar dados frescos
-        const [freshWebhooks, freshQueue] = await Promise.all([
+        const [freshWebhooks, freshQueue, freshKeys] = await Promise.all([
           fileProcessingService.getMediaWebhooks({ limit: 500 }),
           fileProcessingService.getQueue({ limit: 1000 }),
+          fileProcessingService.getQueueKeys(),
         ]);
         setMediaWebhooks(freshWebhooks);
         setQueueItems(freshQueue);
+        const freshKeySet = new Set(freshKeys.map(k =>
+          k.webhookSource === 'email' && k.attachmentIndex !== null
+            ? `${k.webhookId}_att${k.attachmentIndex}`
+            : k.webhookId
+        ));
+        setAllQueueKeys(freshKeySet);
 
         // Marcar tudo que já está na fila no tracking de sessão
-        for (const qi of freshQueue) {
-          enqueuedKeysRef.current.add(makeKey(qi.webhookId, qi.webhookSource, qi.attachmentIndex));
+        for (const k of freshKeys) {
+          enqueuedKeysRef.current.add(makeKey(k.webhookId, k.webhookSource, k.attachmentIndex !== null ? k.attachmentIndex : undefined));
         }
 
         // Filtrar: só enfileirar o que NUNCA foi tentado nesta sessão
@@ -350,20 +372,13 @@ const FileProcessingTab: React.FC = () => {
   };
 
   // Filter helpers — usar chave composta para email (id + attachmentIndex)
-  const queuedKeys = new Set(queueItems.map(i => {
-    if (i.webhookSource === 'email' && i.attachmentIndex !== undefined) {
-      return `${i.webhookId}_att${i.attachmentIndex}`;
-    }
-    return i.webhookId;
-  }));
-
   const getAvailableWebhooks = (): MediaWebhook[] => {
     return mediaWebhooks.filter(w => {
       if (!w.mediaUrl) return false; // sem URL = não processável
       const key = w.source === 'email' && w.attachmentIndex !== undefined
         ? `${w.id}_att${w.attachmentIndex}`
         : w.id;
-      return !queuedKeys.has(key);
+      return !allQueueKeys.has(key);
     });
   };
 

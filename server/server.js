@@ -3216,6 +3216,34 @@ app.get('/api/files/media-webhooks', async (req, res) => {
  * GET /api/files/queue — Lista itens da fila de processamento
  * Query: status, type, limit
  */
+// Endpoint leve: retorna apenas webhookId + attachmentIndex de toda a fila
+app.get('/api/files/queue-keys', async (req, res) => {
+  try {
+    if (!firestoreDb) {
+      return res.status(500).json({ error: 'Firebase não configurado' });
+    }
+
+    const snapshot = await firestoreDb
+      .collection('file_processing_queue')
+      .select('webhookId', 'webhookSource', 'attachmentIndex')
+      .get();
+
+    const keys = snapshot.docs.map(doc => {
+      const d = doc.data();
+      return {
+        webhookId: d.webhookId,
+        webhookSource: d.webhookSource || 'umbler',
+        attachmentIndex: d.attachmentIndex !== undefined ? d.attachmentIndex : null,
+      };
+    });
+
+    return res.json({ keys, count: keys.length });
+  } catch (err) {
+    console.error('❌ [FileProcessing] Erro ao buscar chaves da fila:', err.message);
+    return res.status(500).json({ error: 'Erro ao buscar chaves da fila', details: err.message });
+  }
+});
+
 app.get('/api/files/queue', async (req, res) => {
   try {
     if (!firestoreDb) {

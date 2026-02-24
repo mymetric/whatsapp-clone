@@ -27,6 +27,13 @@ interface ContextSection {
 
 type UseCase = 'whatsapp_response' | 'copilot' | 'document_analysis';
 
+interface AdHocFile {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  textContent: string; // extracted/readable text content
+}
+
 interface FreshData {
   messages: FirestoreMessage[];
   docs: DocumentRecord[];
@@ -43,6 +50,17 @@ interface StateData {
   leadEmails: any[];
   leadDocuments: DocumentRecord[];
   processedFiles: Array<{ id: string; fileName: string; mediaType: string; extractedText: string; processedAt: string }>;
+}
+
+interface ContextStats {
+  totalChars: number;
+  budgetChars: number;
+  compressed: boolean;
+  sections: Array<{
+    name: string;
+    chars: number;
+    itemCount: number;
+  }>;
 }
 
 // ============================================================================
@@ -421,7 +439,8 @@ function buildCompactedContext(
   item: MondayBoardItem,
   columns: MondayColumn[],
   useCase: UseCase,
-  stateData?: StateData
+  stateData?: StateData,
+  adhocFiles?: AdHocFile[]
 ): string {
   // Resolve data sources
   const msgs = data?.messages ?? stateData?.whatsappMessages ?? [];
@@ -502,10 +521,23 @@ function buildCompactedContext(
   // ---- Tier 5: processed files (fill remaining) ----
   const filesSection = compressProcessedFiles(files);
   const tier5 = truncateSection(filesSection, Math.max(0, remaining));
+  remaining -= tier5.length;
 
-  const result = tier1 + tier2 + tier3 + tier4 + tier5;
+  // ---- Ad-hoc files: uploaded on the fly, treated as high priority (appended at end) ----
+  let adhocSection = '';
+  if (adhocFiles && adhocFiles.length > 0) {
+    adhocSection = `\n## Arquivos Enviados pelo Usuario (${adhocFiles.length}):\n`;
+    for (const f of adhocFiles) {
+      adhocSection += `\n### ${f.fileName} (${f.mimeType}):\n${f.textContent}\n`;
+    }
+    // Give generous allocation - at least 50K for user-uploaded files
+    const adhocBudget = Math.max(remaining, 50000);
+    adhocSection = truncateSection(adhocSection, adhocBudget);
+  }
 
-  console.log(`[ContextCompaction] useCase=${useCase} | raw~${rawTotal} chars | compacted=${result.length} chars | msgs=${msgs.length} emails=${emails.length} docs=${docs.length} files=${files.length}`);
+  const result = tier1 + tier2 + tier3 + tier4 + tier5 + adhocSection;
+
+  console.log(`[ContextCompaction] useCase=${useCase} | raw~${rawTotal} chars | compacted=${result.length} chars | msgs=${msgs.length} emails=${emails.length} docs=${docs.length} files=${files.length} adhoc=${adhocFiles?.length || 0}`);
 
   return result;
 }
@@ -622,8 +654,54 @@ function buildUncompressedContext(
 // Export
 // ============================================================================
 
+function getContextStats(
+  data: FreshData | undefined,
+  item: MondayBoardItem,
+  columns: MondayColumn[],
+  useCase: UseCase,
+  stateData?: StateData,
+  adhocFiles?: AdHocFile[]
+): ContextStats {
+  const msgs = data?.messages ?? stateData?.whatsappMessages ?? [];
+  const mondayUpdates = data?.mondayUpdates ?? stateData?.updates ?? [];
+  const docAnalysis = data?.analysis ?? stateData?.documentAnalysis ?? null;
+  const emails = data?.emails ?? stateData?.leadEmails ?? [];
+  const docs = data?.docs ?? stateData?.leadDocuments ?? [];
+  const files = data?.files ?? stateData?.processedFiles ?? [];
+
+  const config = getUseCaseConfig(useCase);
+  const leadProfile = buildLeadProfile(item, columns);
+  const rawTotal = estimateRawSize(leadProfile, msgs, mondayUpdates, docAnalysis, emails, docs, files);
+
+  // Estimate adhoc size
+  let adhocSize = 0;
+  if (adhocFiles) {
+    for (const f of adhocFiles) adhocSize += (f.textContent?.length || 0) + 50;
+  }
+
+  const compacted = buildCompactedContext(data, item, columns, useCase, stateData, adhocFiles);
+
+  const sections: ContextStats['sections'] = [];
+  if (item.column_values) sections.push({ name: 'Perfil do Lead', chars: leadProfile.length, itemCount: 1 });
+  if (msgs.length > 0) sections.push({ name: 'Mensagens WhatsApp', chars: 0, itemCount: msgs.length });
+  if (mondayUpdates.length > 0) sections.push({ name: 'Updates Monday', chars: 0, itemCount: mondayUpdates.length });
+  if (docAnalysis) sections.push({ name: 'Analise de Documentos', chars: (docAnalysis.checklist?.length || 0) + (docAnalysis.analise?.length || 0), itemCount: 1 });
+  if (emails.length > 0) sections.push({ name: 'Emails', chars: 0, itemCount: emails.length });
+  if (docs.length > 0) sections.push({ name: 'Documentos', chars: 0, itemCount: docs.length });
+  if (files.length > 0) sections.push({ name: 'Arquivos Processados', chars: 0, itemCount: files.length });
+  if (adhocFiles && adhocFiles.length > 0) sections.push({ name: 'Arquivos do Usuario', chars: adhocSize, itemCount: adhocFiles.length });
+
+  return {
+    totalChars: compacted.length,
+    budgetChars: config.total,
+    compressed: rawTotal > 30000,
+    sections,
+  };
+}
+
 export const contextCompactionService = {
   buildCompactedContext,
+  getContextStats,
 };
 
-export type { UseCase, FreshData as CompactionFreshData };
+export type { UseCase, AdHocFile, ContextStats, FreshData as CompactionFreshData };

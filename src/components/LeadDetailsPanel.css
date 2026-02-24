@@ -1011,6 +1011,8 @@
 .context-ready {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
 }
 
 .context-error {
@@ -1036,6 +1038,149 @@
 .context-badge.warning {
   background: #fef3c7;
   color: #92400e;
+}
+
+.context-stats-summary {
+  font-size: 0.72rem;
+  color: #64748b;
+  margin-left: 8px;
+}
+
+.context-usage-bar {
+  width: 60px;
+  height: 4px;
+  background: #e2e8f0;
+  border-radius: 2px;
+  margin-left: 8px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.context-usage-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.context-details-toggle {
+  font-size: 0.65rem;
+  color: #94a3b8;
+  margin-left: 6px;
+}
+
+.context-details-panel {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  width: 100%;
+}
+
+.context-detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 3px 0;
+  color: #475569;
+}
+
+.context-detail-row + .context-detail-row {
+  border-top: 1px solid #f1f5f9;
+}
+
+.context-detail-name {
+  font-weight: 500;
+}
+
+.context-detail-count {
+  color: #94a3b8;
+  font-size: 0.7rem;
+}
+
+.context-detail-adhoc {
+  color: #7c3aed;
+}
+
+/* Copilot file attachments */
+.copilot-files-list {
+  padding: 6px 12px;
+  background: #f8fafc;
+  border-top: 1px solid #e2e8f0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.copilot-file-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: linear-gradient(135deg, #ede9fe 0%, #ddd6fe 100%);
+  border: 1px solid #c4b5fd;
+  border-radius: 16px;
+  font-size: 0.72rem;
+  color: #5b21b6;
+}
+
+.copilot-file-icon {
+  font-size: 0.8rem;
+}
+
+.copilot-file-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.copilot-file-size {
+  color: #7c3aed;
+  opacity: 0.7;
+}
+
+.copilot-file-remove {
+  background: none;
+  border: none;
+  color: #7c3aed;
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 0 2px;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+
+.copilot-file-remove:hover {
+  opacity: 1;
+}
+
+.copilot-attach-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: transparent;
+  color: #64748b;
+  border: 1px solid #e2e8f0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.2s;
+}
+
+.copilot-attach-btn:hover:not(:disabled) {
+  background: #f1f5f9;
+  color: #667eea;
+  border-color: #667eea;
+}
+
+.copilot-attach-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .copilot-suggestions button:disabled {

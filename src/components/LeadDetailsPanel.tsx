@@ -7,7 +7,7 @@ import { messageService } from '../services/messageService';
 import { promptService, Prompt, documentService, DocumentAnalysis, emailService } from '../services/api';
 import { DocumentRecord } from '../types';
 import { grokService } from '../services/grokService';
-import { contextCompactionService, UseCase } from '../services/contextCompactionService';
+import { contextCompactionService, UseCase, AdHocFile, ContextStats } from '../services/contextCompactionService';
 import './LeadDetailsPanel.css';
 
 const ATENDIMENTO_BOARD_ID = 607533664;
@@ -92,6 +92,12 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
   const [copilotInput, setCopilotInput] = useState('');
   const [copilotLoading, setCopilotLoading] = useState(false);
   const copilotEndRef = useRef<HTMLDivElement>(null);
+  const [copilotFiles, setCopilotFiles] = useState<AdHocFile[]>([]);
+  const copilotFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Estado para feedback visual do contexto
+  const [contextStats, setContextStats] = useState<ContextStats | null>(null);
+  const [showContextDetails, setShowContextDetails] = useState(false);
 
   // Estados para documentos (usados no contexto do Copiloto)
   const [leadDocuments, setLeadDocuments] = useState<DocumentRecord[]>([]);
@@ -132,6 +138,9 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
     setNewMessage('');
     setShowMessageInput(false);
     setCopilotInput('');
+    setCopilotFiles([]);
+    setContextStats(null);
+    setShowContextDetails(false);
     setActiveTab('whatsapp');
   }, [item.id]);
 
@@ -535,12 +544,53 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
 
   // Obter contexto do lead para os prompts (completo, com compactação inteligente)
   // Obter contexto compactado do lead, delegando para o contextCompactionService
-  const getLeadContext = useCallback((freshData?: FreshData, useCase: UseCase = 'whatsapp_response'): string => {
+  const getLeadContext = useCallback((freshData?: FreshData, useCase: UseCase = 'whatsapp_response', adhocFiles?: AdHocFile[]): string => {
     return contextCompactionService.buildCompactedContext(
       freshData, item, columns, useCase,
-      { whatsappMessages, updates, documentAnalysis, leadEmails, leadDocuments, processedFiles }
+      { whatsappMessages, updates, documentAnalysis, leadEmails, leadDocuments, processedFiles },
+      adhocFiles
     );
   }, [item, columns, whatsappMessages, updates, documentAnalysis, leadDocuments, processedFiles, leadEmails]);
+
+  // Atualizar stats do contexto quando dados mudam
+  useEffect(() => {
+    if (!whatsappLoaded) return;
+    const stats = contextCompactionService.getContextStats(
+      undefined, item, columns, 'copilot',
+      { whatsappMessages, updates, documentAnalysis, leadEmails, leadDocuments, processedFiles },
+      copilotFiles
+    );
+    setContextStats(stats);
+  }, [whatsappLoaded, item, columns, whatsappMessages, updates, documentAnalysis, leadEmails, leadDocuments, processedFiles, copilotFiles]);
+
+  // Handler para upload de arquivos no copilot
+  const handleCopilotFileUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const fileList = event.target.files;
+    if (!fileList || fileList.length === 0) return;
+
+    const newFiles: AdHocFile[] = [];
+    for (let i = 0; i < fileList.length; i++) {
+      const file = fileList[i];
+      try {
+        const text = await file.text();
+        newFiles.push({
+          id: `adhoc_${Date.now()}_${i}`,
+          fileName: file.name,
+          mimeType: file.type || 'application/octet-stream',
+          textContent: text,
+        });
+        console.log(`[CopilotUpload] Arquivo adicionado: ${file.name} (${file.type}, ${Math.round(file.size / 1024)}KB)`);
+      } catch (err) {
+        console.error(`Erro ao ler arquivo ${file.name}:`, err);
+      }
+    }
+    setCopilotFiles(prev => [...prev, ...newFiles]);
+    event.target.value = '';
+  }, []);
+
+  const handleRemoveCopilotFile = useCallback((fileId: string) => {
+    setCopilotFiles(prev => prev.filter(f => f.id !== fileId));
+  }, []);
 
   // Scroll para o final das mensagens
   const scrollToBottom = useCallback(() => {
@@ -1693,7 +1743,7 @@ Instruções:
     setCopilotInput('');
     setCopilotLoading(true);
     try {
-      const leadContext = getLeadContext(undefined, 'copilot');
+      const leadContext = getLeadContext(undefined, 'copilot', copilotFiles);
 
       // Histórico de conversa do copiloto para continuidade
       const copilotHistory = copilotMessages.length > 0
@@ -1743,15 +1793,47 @@ Instruções:
   }, [copilotMessages, activeTab]);
 
   const renderCopilotTab = () => {
+    const usagePercent = contextStats ? Math.round((contextStats.totalChars / contextStats.budgetChars) * 100) : 0;
+    const usageColor = usagePercent > 90 ? '#ef4444' : usagePercent > 70 ? '#f59e0b' : '#10b981';
+
     return (
       <div className="tab-content copilot-tab">
-        {/* Indicador de status do contexto */}
-        <div className="copilot-context-status">
-          {whatsappLoaded && documentsLoaded ? (
+        {/* Indicador de status do contexto com stats */}
+        <div className="copilot-context-status" onClick={() => setShowContextDetails(!showContextDetails)} style={{ cursor: 'pointer' }}>
+          {contextStats ? (
             <div className="context-ready">
               <span className="context-badge success">Contexto pronto</span>
+              <span className="context-stats-summary">
+                {Math.round(contextStats.totalChars / 1000)}K / {Math.round(contextStats.budgetChars / 1000)}K chars
+                {contextStats.compressed && ' (compactado)'}
+              </span>
+              <div className="context-usage-bar">
+                <div className="context-usage-fill" style={{ width: `${Math.min(usagePercent, 100)}%`, background: usageColor }} />
+              </div>
+              <span className="context-details-toggle">{showContextDetails ? '▲' : '▼'}</span>
+            </div>
+          ) : !whatsappLoaded ? (
+            <div className="context-loading">
+              <div className="loading-spinner-tiny"></div>
+              <span>Carregando dados...</span>
             </div>
           ) : null}
+          {showContextDetails && contextStats && (
+            <div className="context-details-panel">
+              {contextStats.sections.map((s, i) => (
+                <div key={i} className="context-detail-row">
+                  <span className="context-detail-name">{s.name}</span>
+                  <span className="context-detail-count">{s.itemCount} {s.itemCount === 1 ? 'item' : 'itens'}</span>
+                </div>
+              ))}
+              {copilotFiles.length > 0 && (
+                <div className="context-detail-row context-detail-adhoc">
+                  <span className="context-detail-name">Arquivos anexados</span>
+                  <span className="context-detail-count">{copilotFiles.length} arquivo(s)</span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="copilot-messages">
@@ -1782,7 +1864,38 @@ Instruções:
           )}
           <div ref={copilotEndRef} />
         </div>
+
+        {/* Arquivos anexados */}
+        {copilotFiles.length > 0 && (
+          <div className="copilot-files-list">
+            {copilotFiles.map(f => (
+              <div key={f.id} className="copilot-file-item">
+                <span className="copilot-file-icon">📄</span>
+                <span className="copilot-file-name">{f.fileName}</span>
+                <span className="copilot-file-size">{Math.round(f.textContent.length / 1024)}KB</span>
+                <button className="copilot-file-remove" onClick={() => handleRemoveCopilotFile(f.id)} title="Remover arquivo">✕</button>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="copilot-input-container">
+          <input
+            type="file"
+            ref={copilotFileInputRef}
+            multiple
+            accept=".txt,.csv,.json,.xml,.md,.log,.html,.pdf,.doc,.docx"
+            onChange={handleCopilotFileUpload}
+            style={{ display: 'none' }}
+          />
+          <button
+            className="copilot-attach-btn"
+            onClick={() => copilotFileInputRef.current?.click()}
+            title="Anexar arquivo ao contexto"
+            disabled={copilotLoading}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/></svg>
+          </button>
           <textarea value={copilotInput} onChange={(e) => setCopilotInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleCopilotSend(); } }} placeholder="Pergunte sobre o lead..." disabled={copilotLoading} rows={1} />
           <button onClick={handleCopilotSend} disabled={!copilotInput.trim() || copilotLoading} className="copilot-send-btn">
             {copilotLoading ? <div className="loading-spinner-tiny"></div> : <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>}

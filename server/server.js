@@ -4,6 +4,22 @@ const crypto = require('crypto');
 const express = require('express');
 const axios = require('axios');
 const FormData = require('form-data');
+
+// Polyfills para pdf-parse no Node.js (requer APIs de browser)
+if (typeof globalThis.DOMMatrix === 'undefined') {
+  globalThis.DOMMatrix = class DOMMatrix {
+    constructor() { this.a = 1; this.b = 0; this.c = 0; this.d = 1; this.e = 0; this.f = 0; }
+  };
+}
+if (typeof globalThis.ImageData === 'undefined') {
+  globalThis.ImageData = class ImageData {
+    constructor(w, h) { this.width = w; this.height = h; this.data = new Uint8ClampedArray(w * h * 4); }
+  };
+}
+if (typeof globalThis.Path2D === 'undefined') {
+  globalThis.Path2D = class Path2D { };
+}
+
 const { PDFParse } = require('pdf-parse');
 const { getDocumentProxy, renderPageAsImage } = require('unpdf');
 const mammoth = require('mammoth');
@@ -264,6 +280,9 @@ function parseUmblerWebhookToMessage(docId, data) {
     || (data._receivedAt?.toDate ? data._receivedAt.toDate().toISOString() : null)
     || null;
 
+  const channel = content.Channel || {};
+  const channelPhone = (channel.PhoneNumber || '').replace(/\D/g, '') || null;
+
   const source = detectSourceFromWebhook(data);
 
   return {
@@ -275,6 +294,7 @@ function parseUmblerWebhookToMessage(docId, data) {
     name: contact.Name || contact.DisplayName || '',
     source,
     timestamp,
+    channel_phone: channelPhone,
     _fromWebhook: true,
   };
 }
@@ -430,18 +450,28 @@ const getMergedMessages = async (phone, limit = 50) => {
   });
 
   // Deduplicação: remover msgs com mesmo conteúdo e timestamp próximo (<2s)
+  // Para mídia (imagem/áudio), comparar também a URL para não descartar mídias diferentes
   const deduplicated = [];
   for (const msg of merged) {
-    const isDuplicate = deduplicated.some(existing => {
+    const dupIndex = deduplicated.findIndex(existing => {
       if (existing.content !== msg.content) return false;
       if (!existing.timestamp || !msg.timestamp) return false;
       const timeDiff = Math.abs(
         new Date(existing.timestamp).getTime() - new Date(msg.timestamp).getTime()
       );
-      return timeDiff < 2000;
+      if (timeDiff >= 2000) return false;
+      // Para mensagens de mídia com URLs diferentes, não são duplicatas
+      if (msg.image && existing.image && msg.image !== existing.image) return false;
+      return true;
     });
-    if (!isDuplicate) {
+    if (dupIndex === -1) {
       deduplicated.push(msg);
+    } else {
+      // Se o novo msg tem mais dados (ex: image URL), substituir o existente
+      const existing = deduplicated[dupIndex];
+      if ((!existing.image && msg.image) || (!existing.audio && msg.audio)) {
+        deduplicated[dupIndex] = msg;
+      }
     }
   }
 
@@ -865,7 +895,16 @@ app.get('/api/firestore/messages', requireAuth, requirePermission('conversas-lea
 
     console.log(`✅ [server] Encontradas ${messages.length} mensagens para ${normalizedPhone} (merged)`);
 
-    return res.json({ messages, count: messages.length });
+    // Detectar channel_phone mais recente da conversa
+    let conversationChannelPhone = null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].channel_phone) {
+        conversationChannelPhone = messages[i].channel_phone;
+        break;
+      }
+    }
+
+    return res.json({ messages, count: messages.length, channel_phone: conversationChannelPhone });
   } catch (err) {
     console.error('❌ [server] Erro ao buscar mensagens do Firestore:', err);
     return res.status(500).json({
@@ -900,7 +939,7 @@ app.post('/api/send-message', requireAuth, requirePermission('conversas-leads'),
       });
     }
 
-    const { phone, message } = req.body || {};
+    const { phone, message, channel_phone } = req.body || {};
     if (!phone || typeof phone !== 'string') {
       return res.status(400).json({ error: 'phone é obrigatório (string)' });
     }
@@ -911,12 +950,13 @@ app.post('/api/send-message', requireAuth, requirePermission('conversas-leads'),
     console.log('📤 [server] Proxy envio mensagem:', {
       phone,
       messageLength: message.length,
+      channel_phone: channel_phone || null,
       upstream: sendMessageUrl,
     });
 
     const upstream = await axios.post(
       sendMessageUrl,
-      { phone, message },
+      { phone, message, channel_phone: channel_phone || null },
       {
         headers: {
           'Content-Type': 'application/json',

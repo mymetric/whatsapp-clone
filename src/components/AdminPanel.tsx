@@ -21,7 +21,23 @@ interface UserRow {
   saving?: boolean;
 }
 
+interface ErrorReportRow {
+  id: string;
+  description: string;
+  leadId: string | null;
+  leadName: string | null;
+  reportedBy: string;
+  reportedByName: string;
+  status: string;
+  url: string | null;
+  userAgent: string | null;
+  createdAt: string;
+}
+
+type AdminTab = 'users' | 'error-reports';
+
 const AdminPanel: React.FC = () => {
+  const [activeTab, setActiveTab] = useState<AdminTab>('users');
   const [users, setUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -32,6 +48,11 @@ const AdminPanel: React.FC = () => {
   const [newPassword, setNewPassword] = useState('');
   const [newRole, setNewRole] = useState<'admin' | 'user'>('user');
   const [creating, setCreating] = useState(false);
+
+  // Error reports
+  const [errorReports, setErrorReports] = useState<ErrorReportRow[]>([]);
+  const [loadingReports, setLoadingReports] = useState(false);
+  const [reportsLoaded, setReportsLoaded] = useState(false);
 
   const showMessage = (type: 'success' | 'error', text: string) => {
     setMessage({ type, text });
@@ -55,6 +76,27 @@ const AdminPanel: React.FC = () => {
   useEffect(() => {
     loadUsers();
   }, [loadUsers]);
+
+  const loadErrorReports = useCallback(async () => {
+    try {
+      setLoadingReports(true);
+      const res = await apiFetch('/api/error-reports');
+      if (!res.ok) throw new Error('Erro ao carregar reports');
+      const data = await res.json();
+      setErrorReports(data.reports || []);
+      setReportsLoaded(true);
+    } catch (err: any) {
+      showMessage('error', err.message || 'Erro ao carregar reports');
+    } finally {
+      setLoadingReports(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'error-reports' && !reportsLoaded) {
+      loadErrorReports();
+    }
+  }, [activeTab, reportsLoaded, loadErrorReports]);
 
   const togglePermission = (email: string, perm: TabPermission) => {
     setUsers(prev =>
@@ -163,6 +205,18 @@ const AdminPanel: React.FC = () => {
     }
   };
 
+  const formatDate = (iso: string) => {
+    try {
+      const d = new Date(iso);
+      return d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return iso;
+    }
+  };
+
+  const openReports = errorReports.filter(r => r.status === 'open');
+  const resolvedReports = errorReports.filter(r => r.status !== 'open');
+
   return (
     <div className="admin-panel">
       <div className="admin-header">
@@ -179,6 +233,22 @@ const AdminPanel: React.FC = () => {
         </div>
       </div>
 
+      {/* Sub-tabs */}
+      <div className="admin-tabs-row">
+        <button
+          className={`admin-tab-btn ${activeTab === 'users' ? 'active' : ''}`}
+          onClick={() => setActiveTab('users')}
+        >
+          Usuarios
+        </button>
+        <button
+          className={`admin-tab-btn ${activeTab === 'error-reports' ? 'active' : ''} ${openReports.length > 0 ? 'has-items' : ''}`}
+          onClick={() => setActiveTab('error-reports')}
+        >
+          Erros Reportados {reportsLoaded && openReports.length > 0 ? `(${openReports.length})` : ''}
+        </button>
+      </div>
+
       <div className="admin-body">
         {message && (
           <div className={`admin-message ${message.type}`}>
@@ -186,140 +256,210 @@ const AdminPanel: React.FC = () => {
           </div>
         )}
 
-        {/* Criar novo usuário */}
-        <div className="admin-section">
-          <div className="admin-section-header">
-            <h2>Novo Usuário</h2>
-          </div>
-          <div className="admin-new-user-form">
-            <div className="admin-form-group">
-              <label>Nome</label>
-              <input
-                type="text"
-                value={newName}
-                onChange={e => setNewName(e.target.value)}
-                placeholder="Nome completo"
-              />
+        {activeTab === 'users' && (
+          <>
+            {/* Criar novo usuário */}
+            <div className="admin-section">
+              <div className="admin-section-header">
+                <h2>Novo Usuario</h2>
+              </div>
+              <div className="admin-new-user-form">
+                <div className="admin-form-group">
+                  <label>Nome</label>
+                  <input
+                    type="text"
+                    value={newName}
+                    onChange={e => setNewName(e.target.value)}
+                    placeholder="Nome completo"
+                  />
+                </div>
+                <div className="admin-form-group">
+                  <label>Email</label>
+                  <input
+                    type="email"
+                    value={newEmail}
+                    onChange={e => setNewEmail(e.target.value)}
+                    placeholder="email@exemplo.com"
+                  />
+                </div>
+                <div className="admin-form-group">
+                  <label>Senha</label>
+                  <input
+                    type="password"
+                    value={newPassword}
+                    onChange={e => setNewPassword(e.target.value)}
+                    placeholder="Senha"
+                  />
+                </div>
+                <div className="admin-form-group">
+                  <label>Role</label>
+                  <select value={newRole} onChange={e => setNewRole(e.target.value as 'admin' | 'user')}>
+                    <option value="user">Usuario</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                </div>
+                <button
+                  className="admin-btn admin-btn-primary"
+                  onClick={createUser}
+                  disabled={creating}
+                >
+                  {creating ? 'Criando...' : 'Criar Usuario'}
+                </button>
+              </div>
             </div>
-            <div className="admin-form-group">
-              <label>Email</label>
-              <input
-                type="email"
-                value={newEmail}
-                onChange={e => setNewEmail(e.target.value)}
-                placeholder="email@exemplo.com"
-              />
-            </div>
-            <div className="admin-form-group">
-              <label>Senha</label>
-              <input
-                type="password"
-                value={newPassword}
-                onChange={e => setNewPassword(e.target.value)}
-                placeholder="Senha"
-              />
-            </div>
-            <div className="admin-form-group">
-              <label>Role</label>
-              <select value={newRole} onChange={e => setNewRole(e.target.value as 'admin' | 'user')}>
-                <option value="user">Usuário</option>
-                <option value="admin">Admin</option>
-              </select>
-            </div>
-            <button
-              className="admin-btn admin-btn-primary"
-              onClick={createUser}
-              disabled={creating}
-            >
-              {creating ? 'Criando...' : 'Criar Usuário'}
-            </button>
-          </div>
-        </div>
 
-        {/* Lista de usuários */}
-        <div className="admin-section">
-          <div className="admin-section-header">
-            <h2>Usuários ({users.length})</h2>
-            <button className="admin-btn admin-btn-secondary" onClick={loadUsers} disabled={loading}>
-              Atualizar
-            </button>
-          </div>
+            {/* Lista de usuários */}
+            <div className="admin-section">
+              <div className="admin-section-header">
+                <h2>Usuarios ({users.length})</h2>
+                <button className="admin-btn admin-btn-secondary" onClick={loadUsers} disabled={loading}>
+                  Atualizar
+                </button>
+              </div>
 
-          {loading ? (
-            <div className="admin-loading">
-              <div className="admin-spinner" />
-              <span>Carregando usuários...</span>
+              {loading ? (
+                <div className="admin-loading">
+                  <div className="admin-spinner" />
+                  <span>Carregando usuarios...</span>
+                </div>
+              ) : (
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>Nome</th>
+                      <th>Email</th>
+                      <th>Role</th>
+                      <th>Permissoes</th>
+                      <th>Acoes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {users.map(user => (
+                      <tr key={user.email}>
+                        <td>{user.name}</td>
+                        <td>{user.email}</td>
+                        <td>
+                          <span className={`admin-role-badge ${user.role}`}>
+                            {user.role}
+                          </span>
+                        </td>
+                        <td>
+                          <div className="admin-permissions-grid">
+                            {ALL_PERMISSIONS.map(perm => (
+                              <label
+                                key={perm.id}
+                                className={`admin-permission-chip ${user.permissions.includes(perm.id) ? 'active' : ''}`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  className="admin-permission-checkbox"
+                                  checked={user.permissions.includes(perm.id)}
+                                  onChange={() => togglePermission(user.email, perm.id)}
+                                />
+                                {perm.label}
+                              </label>
+                            ))}
+                          </div>
+                        </td>
+                        <td>
+                          <div className="admin-actions">
+                            {user.dirty && (
+                              <button
+                                className="admin-btn admin-btn-success"
+                                onClick={() => savePermissions(user.email)}
+                                disabled={user.saving}
+                              >
+                                {user.saving ? 'Salvando...' : 'Salvar'}
+                              </button>
+                            )}
+                            <button
+                              className="admin-btn admin-btn-secondary"
+                              onClick={() => resetPassword(user.email)}
+                            >
+                              Resetar Senha
+                            </button>
+                            <button
+                              className="admin-btn admin-btn-danger"
+                              onClick={() => deleteUser(user.email)}
+                            >
+                              Deletar
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
-          ) : (
-            <table className="admin-table">
-              <thead>
-                <tr>
-                  <th>Nome</th>
-                  <th>Email</th>
-                  <th>Role</th>
-                  <th>Permissões</th>
-                  <th>Ações</th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.map(user => (
-                  <tr key={user.email}>
-                    <td>{user.name}</td>
-                    <td>{user.email}</td>
-                    <td>
-                      <span className={`admin-role-badge ${user.role}`}>
-                        {user.role}
-                      </span>
-                    </td>
-                    <td>
-                      <div className="admin-permissions-grid">
-                        {ALL_PERMISSIONS.map(perm => (
-                          <label
-                            key={perm.id}
-                            className={`admin-permission-chip ${user.permissions.includes(perm.id) ? 'active' : ''}`}
-                          >
-                            <input
-                              type="checkbox"
-                              className="admin-permission-checkbox"
-                              checked={user.permissions.includes(perm.id)}
-                              onChange={() => togglePermission(user.email, perm.id)}
-                            />
-                            {perm.label}
-                          </label>
-                        ))}
+          </>
+        )}
+
+        {activeTab === 'error-reports' && (
+          <div className="admin-section">
+            <div className="admin-section-header">
+              <h2>Erros Reportados ({errorReports.length})</h2>
+              <button
+                className="admin-btn admin-btn-secondary"
+                onClick={() => { setReportsLoaded(false); loadErrorReports(); }}
+                disabled={loadingReports}
+              >
+                Atualizar
+              </button>
+            </div>
+
+            {loadingReports ? (
+              <div className="admin-loading">
+                <div className="admin-spinner" />
+                <span>Carregando reports...</span>
+              </div>
+            ) : errorReports.length === 0 ? (
+              <div className="admin-empty-state">
+                Nenhum erro reportado ainda.
+              </div>
+            ) : (
+              <div className="admin-reports-list">
+                {openReports.length > 0 && (
+                  <>
+                    <div className="admin-reports-group-title">Abertos ({openReports.length})</div>
+                    {openReports.map(report => (
+                      <div key={report.id} className="admin-report-card open">
+                        <div className="admin-report-card-header">
+                          <span className="admin-report-status open">aberto</span>
+                          <span className="admin-report-date">{formatDate(report.createdAt)}</span>
+                        </div>
+                        <div className="admin-report-description">{report.description}</div>
+                        <div className="admin-report-meta">
+                          <span>Por: <strong>{report.reportedByName || report.reportedBy}</strong></span>
+                          {report.leadName && <span>Lead: <strong>{report.leadName}</strong></span>}
+                          {report.url && <span className="admin-report-url">{report.url}</span>}
+                        </div>
                       </div>
-                    </td>
-                    <td>
-                      <div className="admin-actions">
-                        {user.dirty && (
-                          <button
-                            className="admin-btn admin-btn-success"
-                            onClick={() => savePermissions(user.email)}
-                            disabled={user.saving}
-                          >
-                            {user.saving ? 'Salvando...' : 'Salvar'}
-                          </button>
-                        )}
-                        <button
-                          className="admin-btn admin-btn-secondary"
-                          onClick={() => resetPassword(user.email)}
-                        >
-                          Resetar Senha
-                        </button>
-                        <button
-                          className="admin-btn admin-btn-danger"
-                          onClick={() => deleteUser(user.email)}
-                        >
-                          Deletar
-                        </button>
+                    ))}
+                  </>
+                )}
+                {resolvedReports.length > 0 && (
+                  <>
+                    <div className="admin-reports-group-title">Resolvidos ({resolvedReports.length})</div>
+                    {resolvedReports.map(report => (
+                      <div key={report.id} className="admin-report-card resolved">
+                        <div className="admin-report-card-header">
+                          <span className="admin-report-status resolved">{report.status}</span>
+                          <span className="admin-report-date">{formatDate(report.createdAt)}</span>
+                        </div>
+                        <div className="admin-report-description">{report.description}</div>
+                        <div className="admin-report-meta">
+                          <span>Por: <strong>{report.reportedByName || report.reportedBy}</strong></span>
+                          {report.leadName && <span>Lead: <strong>{report.leadName}</strong></span>}
+                        </div>
                       </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
+                    ))}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -372,8 +372,26 @@ const EXTERNAL_API_HEADERS = {
   apikey: process.env.REACT_APP_API_KEY || 'YY2pHUzcGUFKBmZ'
 };
 
+const cleanDriveWrappedUrl = (url: string): string => {
+  // Remove prefixo do Drive quando o id= já contém uma URL completa
+  // Ex: "https://drive.google.com/uc?export=download&id=https://storage.googleapis.com/..."
+  const drivePrefix = 'https://drive.google.com/uc?export=download&id=';
+  if (url.startsWith(drivePrefix)) {
+    const inner = url.slice(drivePrefix.length);
+    if (inner.startsWith('http://') || inner.startsWith('https://')) return inner;
+  }
+  const viewPrefix = 'https://drive.google.com/uc?export=view&id=';
+  if (url.startsWith(viewPrefix)) {
+    const inner = url.slice(viewPrefix.length);
+    if (inner.startsWith('http://') || inner.startsWith('https://')) return inner;
+  }
+  return url;
+};
+
 const buildDriveUrl = (fileId: string) => {
   if (!fileId) return '';
+  const cleaned = cleanDriveWrappedUrl(fileId);
+  if (cleaned !== fileId) return cleaned;
   if (fileId.startsWith('http')) return fileId;
   return `https://drive.google.com/uc?export=download&id=${fileId}`;
 };

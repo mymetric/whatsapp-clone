@@ -340,12 +340,22 @@ export const firestoreRestPromptService = {
   }
 };
 
+// Remove prefixo do Drive quando o id= já contém uma URL completa
+const cleanDriveWrappedUrl = (url: string): string => {
+  const drivePrefix = 'https://drive.google.com/uc?export=download&id=';
+  if (url.startsWith(drivePrefix)) {
+    const inner = url.slice(drivePrefix.length);
+    if (inner.startsWith('http://') || inner.startsWith('https://')) return inner;
+  }
+  return url;
+};
+
 // Converter documento do Firestore para Attachment
 const firestoreDocToAttachment = (doc: any): Attachment => {
   const fields = doc.fields || {};
   const docId = doc.name.split('/').pop() || '';
 
-  return {
+  const result: any = {
     id: docId,
     lawsuitId: fields.lawsuit_id?.stringValue || '',
     // Mantém todos os campos originais disponíveis
@@ -359,6 +369,13 @@ const firestoreDocToAttachment = (doc: any): Attachment => {
       return acc;
     }, {})
   };
+
+  // Limpar file_url que pode ter prefixo do Drive wrapping uma URL do GCS
+  if (result.file_url && typeof result.file_url === 'string') {
+    result.file_url = cleanDriveWrappedUrl(result.file_url);
+  }
+
+  return result;
 };
 
 // Serviço para anexos (coleção attachments no database messages)

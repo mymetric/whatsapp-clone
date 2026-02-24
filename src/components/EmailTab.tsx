@@ -131,7 +131,8 @@ const EmailTab: React.FC<EmailTabProps> = ({ selectedPhone }) => {
 
 
   const getImageUrl = (fileId: string) => {
-    // Construir URL da imagem baseada no file ID
+    // Se o fileId já é uma URL completa (ex: GCS), retorna direto
+    if (fileId.startsWith('http://') || fileId.startsWith('https://')) return fileId;
     return `https://drive.google.com/uc?export=view&id=${fileId}`;
   };
 

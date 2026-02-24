@@ -2524,6 +2524,12 @@ function classifyMediaType(mimeType) {
 // O campo `file` nos anexos de email pode ser um Google Drive file ID ou uma URL completa
 function resolveEmailFileUrl(fileValue) {
   if (!fileValue) return '';
+  // Remove prefixo do Drive quando o id= já contém uma URL completa
+  const drivePrefix = 'https://drive.google.com/uc?export=download&id=';
+  if (fileValue.startsWith(drivePrefix)) {
+    const inner = fileValue.slice(drivePrefix.length);
+    if (inner.startsWith('http://') || inner.startsWith('https://')) return inner;
+  }
   // Se já é uma URL completa, retorna direto
   if (fileValue.startsWith('http://') || fileValue.startsWith('https://')) return fileValue;
   // Se parece com um Google Drive file ID, construir a URL de download direto

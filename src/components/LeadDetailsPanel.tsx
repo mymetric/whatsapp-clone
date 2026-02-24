@@ -7,6 +7,7 @@ import { messageService } from '../services/messageService';
 import { promptService, Prompt, documentService, DocumentAnalysis, emailService } from '../services/api';
 import { DocumentRecord } from '../types';
 import { grokService } from '../services/grokService';
+import { contextCompactionService, UseCase } from '../services/contextCompactionService';
 import './LeadDetailsPanel.css';
 
 const ATENDIMENTO_BOARD_ID = 607533664;
@@ -56,6 +57,7 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
   const [newMessage, setNewMessage] = useState('');
   const [showMessageInput, setShowMessageInput] = useState(false);
   const [sendingMessage, setSendingMessage] = useState(false);
+  const [conversationChannelPhone, setConversationChannelPhone] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const allPromptsMapRef = useRef<Map<string, Prompt>>(new Map());
@@ -91,11 +93,6 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
   const [copilotLoading, setCopilotLoading] = useState(false);
   const copilotEndRef = useRef<HTMLDivElement>(null);
 
-  // Estados para pré-sumarização do contexto
-  const [contextSummary, setContextSummary] = useState<string | null>(null);
-  const [generatingSummary, setGeneratingSummary] = useState(false);
-  const [summaryError, setSummaryError] = useState<string | null>(null);
-
   // Estados para documentos (usados no contexto do Copiloto)
   const [leadDocuments, setLeadDocuments] = useState<DocumentRecord[]>([]);
   const [documentAnalysis, setDocumentAnalysis] = useState<DocumentAnalysis | null>(null);
@@ -130,9 +127,6 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
     setLeadEmails([]);
     setEmailsLoaded(false);
     setExpandedEmails(new Set());
-    setContextSummary(null);
-    setGeneratingSummary(false);
-    setSummaryError(null);
     setContextReady(false);
     setLoadingContext(false);
     setNewMessage('');
@@ -343,6 +337,7 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
         return dateA - dateB;
       });
       setWhatsappMessages(sortedMessages);
+      setConversationChannelPhone(result.channel_phone || null);
       setWhatsappLoaded(true);
       if (result.messages.length === 0) {
         setWhatsappError('Nenhuma mensagem encontrada para este telefone');
@@ -539,214 +534,13 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
   }, [activeTab, contextReady, loadingContext, ensureDataLoaded]);
 
   // Obter contexto do lead para os prompts (completo, com compactação inteligente)
-  // Aceita dados frescos via parâmetro (de ensureDataLoaded) para evitar stale state
-  const getLeadContext = useCallback((freshData?: FreshData): string => {
-    const MAX_CONTEXT_CHARS = 350000; // ~87K tokens — Grok-4-fast suporta 131K tokens
-    const phone = getLeadPhone();
-    const sections: string[] = [];
-
-    const msgs = freshData?.messages ?? whatsappMessages;
-    const mondayUpdates = freshData?.mondayUpdates ?? updates;
-    const docAnalysis = freshData?.analysis ?? documentAnalysis;
-    const emails = freshData?.emails ?? leadEmails;
-    const docs = freshData?.docs ?? leadDocuments;
-    const files = freshData?.files ?? processedFiles;
-
-    // 1. Dados do Lead + colunas do Monday
-    let leadInfo = `## Dados do Lead:\n`;
-    leadInfo += `- Nome: ${item.name || 'Não informado'}\n`;
-    leadInfo += `- Telefone: ${phone || 'Não informado'}\n`;
-    if (item.column_values) {
-      item.column_values.forEach(col => {
-        if (col.text && col.text.trim()) {
-          const colTitle = columns.find(c => c.id === col.id)?.title || col.id;
-          leadInfo += `- ${colTitle}: ${col.text}\n`;
-        }
-      });
-    }
-    sections.push(leadInfo);
-
-    // 2. Histórico COMPLETO de mensagens WhatsApp
-    if (msgs.length > 0) {
-      let msgSection = `\n## Histórico de Conversa WhatsApp (${msgs.length} mensagens):\n`;
-      msgs.forEach((msg, idx) => {
-        const sender = msg.source === 'Contact' ? 'Cliente' : 'Atendente';
-        const time = msg.timestamp ? new Date(msg.timestamp).toLocaleString('pt-BR') : '';
-        msgSection += `${idx + 1}. [${time}] ${sender}: ${msg.content}\n`;
-      });
-      sections.push(msgSection);
-    }
-
-    // 3. Updates do Monday (comentários)
-    if (mondayUpdates.length > 0) {
-      let updatesSection = `\n## Updates do Monday (${mondayUpdates.length}):\n`;
-      mondayUpdates.forEach((update, idx) => {
-        const creator = update.creator?.name || 'Desconhecido';
-        const date = mondayService.formatDate(update.created_at);
-        const body = mondayService.formatUpdateBody(update.body);
-        updatesSection += `${idx + 1}. [${date}] ${creator}: ${body}\n`;
-      });
-      sections.push(updatesSection);
-    }
-
-    // 4. Análise de Documentos (completa)
-    if (docAnalysis) {
-      let analysisSection = `\n## Análise de Documentos do Monday:\n`;
-      if (docAnalysis.checklist) {
-        analysisSection += `### Checklist:\n${docAnalysis.checklist}\n`;
-      }
-      if (docAnalysis.analise) {
-        analysisSection += `### Análise:\n${docAnalysis.analise}\n`;
-      }
-      sections.push(analysisSection);
-    }
-
-    // 5. Emails completos
-    if (emails.length > 0) {
-      let emailSection = `\n## Emails (${emails.length} encontrados):\n`;
-      emails.forEach((email, idx) => {
-        emailSection += `\n### Email ${idx + 1}: ${email.subject || 'Sem assunto'}\n`;
-        if (email.from) emailSection += `De: ${email.from}\n`;
-        if (email.to) emailSection += `Para: ${email.to}\n`;
-        if (email.date || email.timestamp) emailSection += `Data: ${email.date || email.timestamp}\n`;
-        if (email.direction) emailSection += `Direção: ${email.direction === 'sent' ? 'Enviado' : 'Recebido'}\n`;
-        if (email.text) {
-          emailSection += `Conteúdo:\n${email.text}\n`;
-        }
-      });
-      sections.push(emailSection);
-    }
-
-    // 6. Documentos do Lead (todos, completos)
-    if (docs.length > 0) {
-      let docSection = `\n## Documentos do Lead (${docs.length} documentos):\n`;
-      docs.forEach((doc, idx) => {
-        const origin = doc.origin === 'email' ? 'Email' : 'Telefone';
-        const direction = doc.direction === 'sent' ? 'Enviado' : 'Recebido';
-        const subject = doc.metadata?.subject || 'Sem assunto';
-        docSection += `\n### Documento ${idx + 1} (${origin} - ${direction}):\n`;
-        docSection += `- Assunto: ${subject}\n`;
-        if (doc.text) {
-          docSection += `- Conteúdo: ${doc.text}\n`;
-        }
-        if (doc.images && doc.images.length > 0) {
-          doc.images.forEach((img, imgIdx) => {
-            if (img.extractedText) {
-              docSection += `- Arquivo ${imgIdx + 1} (transcrição): ${img.extractedText}\n`;
-            }
-          });
-        }
-      });
-      sections.push(docSection);
-    }
-
-    // 7. Arquivos processados (completos)
-    if (files.length > 0) {
-      let fileSection = `\n## Arquivos Processados (${files.length} arquivo(s)):\n`;
-      files.forEach((f, idx) => {
-        fileSection += `\n### Arquivo ${idx + 1}: ${f.fileName || 'sem nome'} (${f.mediaType})\n${f.extractedText}\n`;
-      });
-      sections.push(fileSection);
-    }
-
-    // Juntar e compactar se exceder limite
-    let fullContext = sections.join('\n');
-
-    if (fullContext.length > MAX_CONTEXT_CHARS) {
-      const overBy = fullContext.length - MAX_CONTEXT_CHARS;
-      let toTrim = overBy;
-      for (let i = sections.length - 1; i >= 1 && toTrim > 0; i--) {
-        const sectionLen = sections[i].length;
-        if (sectionLen > 500 && toTrim > 0) {
-          const trimTo = Math.max(500, sectionLen - toTrim);
-          const trimmed = sections[i].substring(0, trimTo) + '\n...[contexto compactado por limite]\n';
-          toTrim -= (sectionLen - trimmed.length);
-          sections[i] = trimmed;
-        }
-      }
-      fullContext = sections.join('\n');
-      if (fullContext.length > MAX_CONTEXT_CHARS) {
-        fullContext = fullContext.substring(0, MAX_CONTEXT_CHARS) + '\n...[contexto truncado]';
-      }
-    }
-
-    return fullContext;
-  }, [item, columns, whatsappMessages, getLeadPhone, documentAnalysis, leadDocuments, processedFiles, updates, leadEmails]);
-
-  // Função para gerar o resumo do contexto
-  const generateContextSummary = useCallback(async () => {
-    if (contextSummary || generatingSummary) return;
-
-    setGeneratingSummary(true);
-    setSummaryError(null);
-
-    try {
-      const fullContext = getLeadContext();
-
-      // Se o contexto for pequeno, não precisa sumarizar
-      if (fullContext.length < 3000) {
-        setContextSummary(fullContext);
-        setGeneratingSummary(false);
-        console.log('📋 Contexto pequeno, usando direto sem sumarização');
-        return;
-      }
-
-      console.log(`🤖 Gerando resumo do contexto (${fullContext.length} chars)...`);
-
-      const summaryPrompt = `Você é um assistente especializado em criar resumos estruturados para atendimento de leads.
-
-Analise o contexto completo abaixo e crie um RESUMO ESTRUTURADO que preserve todas as informações importantes para um atendente ou assistente de IA.
-
-O resumo deve incluir:
-1. **Perfil do Lead**: Nome, contato, dados demográficos relevantes
-2. **Situação/Caso**: O que o lead precisa, qual o problema ou necessidade
-3. **Histórico de Interações**: Resumo cronológico das conversas mais relevantes
-4. **Documentos Relevantes**: O que foi enviado/recebido e principais informações
-5. **Status Atual**: Em que ponto está o atendimento
-6. **Pontos de Atenção**: Informações críticas que não podem ser ignoradas
-
-IMPORTANTE:
-- Seja detalhado mas conciso
-- Preserve datas, valores, nomes e informações factuais
-- Destaque informações que podem ser úteis para o próximo contato
-- Máximo de 2000 palavras
-
-CONTEXTO COMPLETO:
-${fullContext}`;
-
-      const summary = await grokService.generateResponse(summaryPrompt, {
-        systemPrompt: 'Você é um assistente especializado em sumarização de contexto para atendimento. Crie resumos estruturados e úteis.',
-      });
-
-      setContextSummary(summary);
-      console.log(`✅ Resumo gerado com sucesso (${summary.length} chars)`);
-    } catch (error) {
-      console.error('Erro ao gerar resumo do contexto:', error);
-      setSummaryError('Erro ao gerar resumo. Usando contexto truncado.');
-      // Em caso de erro, usar o contexto normal (truncado)
-      setContextSummary(null);
-    } finally {
-      setGeneratingSummary(false);
-    }
-  }, [contextSummary, generatingSummary, getLeadContext]);
-
-  // Gerar resumo quando os dados estiverem carregados (para WhatsApp e Copilot)
-  useEffect(() => {
-    // Gerar resumo quando WhatsApp ou Copilot estiver ativo e dados carregados
-    const shouldGenerateSummary = (activeTab === 'copilot' || activeTab === 'whatsapp')
-      && whatsappLoaded
-      && !contextSummary
-      && !generatingSummary;
-
-    if (shouldGenerateSummary) {
-      // Para WhatsApp, também carregar documentos se ainda não carregados
-      if (activeTab === 'whatsapp' && !documentsLoaded) {
-        loadDocuments();
-      } else if (documentsLoaded) {
-        generateContextSummary();
-      }
-    }
-  }, [activeTab, whatsappLoaded, documentsLoaded, contextSummary, generatingSummary, generateContextSummary, loadDocuments]);
+  // Obter contexto compactado do lead, delegando para o contextCompactionService
+  const getLeadContext = useCallback((freshData?: FreshData, useCase: UseCase = 'whatsapp_response'): string => {
+    return contextCompactionService.buildCompactedContext(
+      freshData, item, columns, useCase,
+      { whatsappMessages, updates, documentAnalysis, leadEmails, leadDocuments, processedFiles }
+    );
+  }, [item, columns, whatsappMessages, updates, documentAnalysis, leadDocuments, processedFiles, leadEmails]);
 
   // Scroll para o final das mensagens
   const scrollToBottom = useCallback(() => {
@@ -810,7 +604,7 @@ ${fullContext}`;
     try {
       // Garantir que todos os dados estão carregados e usar dados frescos
       const freshData = await ensureDataLoaded();
-      const leadContext = getLeadContext(freshData);
+      const leadContext = getLeadContext(freshData, 'whatsapp_response');
 
       // Concatenar cadeia de prompts pais (avô → pai → filho)
       const promptChain: string[] = [];
@@ -894,7 +688,7 @@ Instruções:
     try {
       // Garantir que todos os dados estão carregados e usar dados frescos
       const freshData = await ensureDataLoaded();
-      const leadContext = getLeadContext(freshData);
+      const leadContext = getLeadContext(freshData, 'document_analysis');
 
       // Concatenar cadeia de prompts pais (avô → pai → filho)
       const promptChain: string[] = [];
@@ -1000,7 +794,7 @@ Instruções:
     try {
       // Enviar mensagem via API - adicionar código do país se não tiver
       const phoneToSend = phone.startsWith('+') ? phone : `+${phone}`;
-      const result = await messageService.sendMessage(phoneToSend, messageText);
+      const result = await messageService.sendMessage(phoneToSend, messageText, conversationChannelPhone);
 
       if (result.success) {
         console.log('Mensagem enviada com sucesso');
@@ -1806,35 +1600,28 @@ Instruções:
         )}
 
         {/* Seção de Prompts */}
-        {prompts.length > 0 && (
+        {prompts.length > 0 && contextReady && (
           <div className="prompts-section">
             <div className="prompts-header">
               <span className="prompts-label">Prompts:</span>
             </div>
-            {!contextReady ? (
-              <div className="prompts-loading-context">
-                <div className="prompt-loading-spinner"></div>
-                <span>Carregando contexto do lead...</span>
-              </div>
-            ) : (
-              <div className="prompts-list">
-                {prompts.map((prompt) => (
-                  <div key={prompt.id} className="prompt-item">
-                    <button
-                      onClick={() => handleUsePrompt(prompt)}
-                      disabled={usingPrompt === prompt.id}
-                      className={`prompt-use-btn ${usingPrompt === prompt.id ? 'using' : ''}`}
-                      title={prompt.description || prompt.name}
-                    >
-                      {usingPrompt === prompt.id && (
-                        <div className="prompt-loading-spinner"></div>
-                      )}
-                      <span className="prompt-name">{prompt.name}</span>
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
+            <div className="prompts-list">
+              {prompts.map((prompt) => (
+                <div key={prompt.id} className="prompt-item">
+                  <button
+                    onClick={() => handleUsePrompt(prompt)}
+                    disabled={usingPrompt === prompt.id}
+                    className={`prompt-use-btn ${usingPrompt === prompt.id ? 'using' : ''}`}
+                    title={prompt.description || prompt.name}
+                  >
+                    {usingPrompt === prompt.id && (
+                      <div className="prompt-loading-spinner"></div>
+                    )}
+                    <span className="prompt-name">{prompt.name}</span>
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
@@ -1906,9 +1693,7 @@ Instruções:
     setCopilotInput('');
     setCopilotLoading(true);
     try {
-      // Usar o resumo pré-gerado se disponível, senão usar contexto truncado
-      const leadContext = contextSummary || getLeadContext();
-      const contextSource = contextSummary ? 'RESUMO PRÉ-PROCESSADO' : 'CONTEXTO TRUNCADO';
+      const leadContext = getLeadContext(undefined, 'copilot');
 
       // Histórico de conversa do copiloto para continuidade
       const copilotHistory = copilotMessages.length > 0
@@ -1918,7 +1703,7 @@ Instruções:
       const systemPrompt = `Você é um assistente especializado em análise de leads e vendas.
 Analise os dados do lead e responda às perguntas do usuário de forma útil e objetiva.
 
---- ${contextSource} DO LEAD ---
+--- CONTEXTO DO LEAD ---
 ${leadContext}
 --- FIM DO CONTEXTO ---
 ${copilotHistory}
@@ -1962,18 +1747,9 @@ Instruções:
       <div className="tab-content copilot-tab">
         {/* Indicador de status do contexto */}
         <div className="copilot-context-status">
-          {generatingSummary ? (
-            <div className="context-loading">
-              <div className="loading-spinner-tiny"></div>
-              <span>Analisando contexto completo do lead...</span>
-            </div>
-          ) : contextSummary ? (
+          {whatsappLoaded && documentsLoaded ? (
             <div className="context-ready">
-              <span className="context-badge success">✓ Contexto completo carregado</span>
-            </div>
-          ) : summaryError ? (
-            <div className="context-error">
-              <span className="context-badge warning">⚠ {summaryError}</span>
+              <span className="context-badge success">Contexto pronto</span>
             </div>
           ) : null}
         </div>
@@ -1985,9 +1761,9 @@ Instruções:
               <h3>Copiloto de Vendas</h3>
               <p>Pergunte qualquer coisa sobre este lead:</p>
               <div className="copilot-suggestions">
-                <button onClick={() => setCopilotInput('Resuma os dados deste lead')} disabled={generatingSummary}>Resumir dados</button>
-                <button onClick={() => setCopilotInput('Qual a melhor abordagem para este lead?')} disabled={generatingSummary}>Sugerir abordagem</button>
-                <button onClick={() => setCopilotInput('Analise a conversa do WhatsApp')} disabled={generatingSummary}>Analisar conversa</button>
+                <button onClick={() => setCopilotInput('Resuma os dados deste lead')}>Resumir dados</button>
+                <button onClick={() => setCopilotInput('Qual a melhor abordagem para este lead?')}>Sugerir abordagem</button>
+                <button onClick={() => setCopilotInput('Analise a conversa do WhatsApp')}>Analisar conversa</button>
               </div>
             </div>
           ) : (

@@ -35,6 +35,33 @@ module.exports = async (req, res) => {
     }
   }
 
+  // Recuperar itens presos em 'processing' há mais de 10 minutos
+  if (db && queueStats.processing > 0) {
+    try {
+      const stuckThreshold = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+      const stuckSnap = await db
+        .collection('file_processing_queue')
+        .where('status', '==', 'processing')
+        .get();
+      let recovered = 0;
+      for (const doc of stuckSnap.docs) {
+        const data = doc.data();
+        const lastAttempt = data.lastAttemptAt || data.createdAt || '';
+        if (lastAttempt && lastAttempt <= stuckThreshold) {
+          await doc.ref.update({ status: 'queued', error: 'Recuperado: preso em processing' });
+          recovered++;
+        }
+      }
+      if (recovered > 0) {
+        console.log(`[CRON] Recuperados ${recovered} itens presos em 'processing'`);
+        queueStats.queued += recovered;
+        queueStats.processing -= recovered;
+      }
+    } catch (err) {
+      console.log(`[CRON] Erro ao recuperar itens presos: ${err.message}`);
+    }
+  }
+
   if (queueStats.queued === 0) {
     const elapsed = Date.now() - startTime;
     console.log(`[CRON] Nada para processar. ${elapsed}ms`);
@@ -77,7 +104,7 @@ module.exports = async (req, res) => {
       const itemElapsed = Date.now() - itemStart;
       console.log(`[CRON] Item ${i + 1} ERRO: ${err.message} | ${itemElapsed}ms`);
       results.push({ error: err.message, elapsed: `${itemElapsed}ms`, success: false });
-      break;
+      // continue para processar os próximos itens ao invés de parar tudo
     }
   }
 

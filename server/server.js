@@ -2356,6 +2356,49 @@ app.post('/api/monday/create-item', requireAuth, requirePermission('conversas-le
  * POST /api/umbler/webhook
  * Salva as notificações na collection 'umbler_webhooks' do Firestore
  */
+// Auto-enqueue: adiciona mídia do Umbler à file_processing_queue automaticamente
+async function autoEnqueueUmblerMedia(db, webhookId, webhookData) {
+  const payload = webhookData.Payload || {};
+  const content = payload.Content || {};
+  const message = content.Message || webhookData.Message || {};
+  const lastMessage = content.LastMessage || webhookData.LastMessage || {};
+  const messageType = message.MessageType || lastMessage.MessageType || '';
+
+  if (!messageType || messageType === 'Text') return;
+
+  const msgFile = message.File || {};
+  const lmFile = lastMessage.File || {};
+  const mediaUrl = msgFile.Url || lmFile.Url || '';
+  if (!mediaUrl) return;
+
+  const queueRef = db.collection('file_processing_queue');
+  const existing = await queueRef.where('webhookId', '==', webhookId).limit(1).get();
+  if (!existing.empty) return;
+
+  const mimeType = msgFile.ContentType || lmFile.ContentType || '';
+  const fileName = msgFile.OriginalName || lmFile.OriginalName || `file_${webhookId}`;
+  const contactPhone = (content.Contact || webhookData.Contact || {}).PhoneNumber || '';
+  const thumbnailObj = message.Thumbnail || lastMessage.Thumbnail || {};
+  const thumbnailData = thumbnailObj.Data || null;
+  const thumbnailMime = thumbnailObj.ContentType || 'image/jpeg';
+
+  let mediaType = classifyMediaType(mimeType);
+  if (messageType === 'Audio') mediaType = 'audio';
+  if (messageType === 'Image') mediaType = 'image';
+  if (messageType === 'Video') mediaType = 'video';
+
+  await queueRef.add({
+    webhookId, webhookSource: 'umbler', sourcePhone: contactPhone,
+    mediaUrl, mediaFileName: fileName, mediaMimeType: mimeType, mediaType,
+    thumbnailBase64: thumbnailData ? `data:${thumbnailMime};base64,${thumbnailData}` : null,
+    receivedAt: new Date().toISOString(),
+    status: 'queued', extractedText: null, error: null, processingMethod: null,
+    attempts: 0, maxAttempts: 3, lastAttemptAt: null, nextRetryAt: null,
+    gcsUrl: null, gcsPath: null, processedAt: null, createdAt: new Date().toISOString(),
+  });
+  console.log(`📥 [Auto-enqueue] Umbler ${webhookId} (${messageType}) enfileirado`);
+}
+
 app.post('/api/umbler/webhook', async (req, res) => {
   try {
     const webhookData = req.body;
@@ -2392,9 +2435,16 @@ app.post('/api/umbler/webhook', async (req, res) => {
       console.log(`✅ [Umbler Webhook] Salvo com ID gerado: ${docRef.id}`);
     }
 
+    const savedId = eventId || docRef.id;
+
+    // Auto-enqueue mídia (fire-and-forget)
+    autoEnqueueUmblerMedia(firestoreDb, savedId, webhookData).catch(err => {
+      console.warn(`⚠️ [Umbler Webhook] Auto-enqueue falhou (não fatal): ${err.message}`);
+    });
+
     return res.status(200).json({
       success: true,
-      id: eventId || docRef.id,
+      id: savedId,
       message: 'Webhook recebido e salvo com sucesso'
     });
   } catch (err) {

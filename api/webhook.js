@@ -1,4 +1,5 @@
 const admin = require('firebase-admin');
+const { extractEmailAttachments, classifyMediaType } = require('../lib/firebase-admin');
 
 // Inicializar Firebase Admin SDK (singleton)
 let firestoreDb = null;
@@ -86,6 +87,91 @@ async function getRawBody(req) {
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
     req.on('error', reject);
   });
+}
+
+/**
+ * Auto-enqueue: adiciona mídia detectada à file_processing_queue automaticamente.
+ * Roda como fire-and-forget para não atrasar a response do webhook.
+ */
+async function autoEnqueueMedia(db, type, webhookId, webhookData) {
+  const queueRef = db.collection('file_processing_queue');
+
+  if (type === 'umbler') {
+    const payload = webhookData.Payload || {};
+    const content = payload.Content || {};
+    const message = content.Message || webhookData.Message || {};
+    const lastMessage = content.LastMessage || webhookData.LastMessage || {};
+    const messageType = message.MessageType || lastMessage.MessageType || '';
+
+    if (!messageType || messageType === 'Text') return;
+
+    const msgFile = message.File || {};
+    const lmFile = lastMessage.File || {};
+    const mediaUrl = msgFile.Url || lmFile.Url || '';
+    if (!mediaUrl) return;
+
+    // Verificar duplicata
+    const existing = await queueRef.where('webhookId', '==', webhookId).limit(1).get();
+    if (!existing.empty) return;
+
+    const mimeType = msgFile.ContentType || lmFile.ContentType || '';
+    const fileName = msgFile.OriginalName || lmFile.OriginalName || `file_${webhookId}`;
+    const contactPhone = (content.Contact || webhookData.Contact || {}).PhoneNumber || '';
+    const thumbnailObj = message.Thumbnail || lastMessage.Thumbnail || {};
+    const thumbnailData = thumbnailObj.Data || null;
+    const thumbnailMime = thumbnailObj.ContentType || 'image/jpeg';
+
+    let mediaType = classifyMediaType(mimeType);
+    if (messageType === 'Audio') mediaType = 'audio';
+    if (messageType === 'Image') mediaType = 'image';
+    if (messageType === 'Video') mediaType = 'video';
+
+    await queueRef.add({
+      webhookId, webhookSource: 'umbler', sourcePhone: contactPhone,
+      mediaUrl, mediaFileName: fileName, mediaMimeType: mimeType, mediaType,
+      thumbnailBase64: thumbnailData ? `data:${thumbnailMime};base64,${thumbnailData}` : null,
+      receivedAt: new Date().toISOString(),
+      status: 'queued', extractedText: null, error: null, processingMethod: null,
+      attempts: 0, maxAttempts: 3, lastAttemptAt: null, nextRetryAt: null,
+      gcsUrl: null, gcsPath: null, processedAt: null, createdAt: new Date().toISOString(),
+    });
+    console.log(`📥 [Auto-enqueue] Umbler ${webhookId} (${messageType}) enfileirado`);
+
+  } else if (type === 'email') {
+    const attachments = extractEmailAttachments(webhookData);
+    if (attachments.length === 0) return;
+
+    // Verificar duplicata
+    const existing = await queueRef.where('webhookId', '==', webhookId).limit(1).get();
+    if (!existing.empty) return;
+
+    const totalAtt = attachments.length;
+    const rawSender = webhookData.sender || webhookData.from || '';
+    const senderName = rawSender.replace(/<[^>]+>/, '').replace(/["']/g, '').trim() || rawSender;
+
+    for (const att of attachments) {
+      const eFileName = totalAtt > 1
+        ? `Anexo ${att.index + 1}/${totalAtt} - ${senderName}`
+        : `Anexo - ${senderName}`;
+      let eMimeType = '';
+      let eMediaType = 'image';
+      const urlLower = att.url.toLowerCase();
+      if (urlLower.includes('.pdf')) { eMediaType = 'pdf'; eMimeType = 'application/pdf'; }
+      else if (urlLower.includes('.doc')) { eMediaType = 'docx'; eMimeType = 'application/msword'; }
+      else if (urlLower.includes('.mp3') || urlLower.includes('.wav') || urlLower.includes('.ogg')) { eMediaType = 'audio'; }
+
+      await queueRef.add({
+        webhookId, webhookSource: 'email', attachmentIndex: att.index,
+        sourcePhone: webhookData.sender || webhookData.from || '',
+        mediaUrl: att.url, mediaFileName: eFileName, mediaMimeType: eMimeType, mediaType: eMediaType,
+        thumbnailBase64: null, receivedAt: new Date().toISOString(),
+        status: 'queued', extractedText: null, error: null, processingMethod: null,
+        attempts: 0, maxAttempts: 3, lastAttemptAt: null, nextRetryAt: null,
+        gcsUrl: null, gcsPath: null, processedAt: null, createdAt: new Date().toISOString(),
+      });
+    }
+    console.log(`📥 [Auto-enqueue] Email ${webhookId} (${attachments.length} anexos) enfileirado`);
+  }
 }
 
 module.exports = async (req, res) => {
@@ -202,9 +288,16 @@ module.exports = async (req, res) => {
       console.log(`✅ [Webhook ${type}] Salvo com ID gerado: ${docRef.id}`);
     }
 
+    const savedId = docId || docRef.id;
+
+    // Auto-enqueue: enfileirar mídia automaticamente (fire-and-forget)
+    autoEnqueueMedia(firestoreDb, type, savedId, webhookData).catch(err => {
+      console.warn(`⚠️ [Webhook ${type}] Auto-enqueue falhou (não fatal): ${err.message}`);
+    });
+
     return res.status(200).json({
       success: true,
-      id: docId || docRef.id,
+      id: savedId,
       type,
       collection: collectionName,
       message: 'Webhook recebido e salvo com sucesso'

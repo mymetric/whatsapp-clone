@@ -491,6 +491,25 @@
   color: #5a67d8;
 }
 
+.whatsapp-file-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 0.85em;
+  padding: 4px 8px;
+  border-radius: 4px;
+  margin-bottom: 4px;
+  text-decoration: none;
+  transition: all 0.2s;
+}
+
+.whatsapp-file-link:hover {
+  background: #fde68a;
+  color: #78350f;
+}
+
 /* WhatsApp Input */
 .whatsapp-input-container {
   display: flex;

@@ -273,8 +273,14 @@ function parseUmblerWebhookToMessage(docId, data) {
   const msgFile = message.File || {};
   const lmFile = lastMessage.File || {};
   const mediaUrl = msgFile.Url || lmFile.Url || '';
+  const fileName = msgFile.OriginalName || lmFile.OriginalName || '';
   const isAudio = messageType === 'Audio';
   const isImage = messageType === 'Image' || messageType === 'Video';
+  const isFile = messageType === 'File' || messageType === 'Document';
+  const isMedia = isAudio || isImage || isFile;
+
+  // Webhook de status/leitura: tem MessageType de mídia mas sem URL = descartar
+  if (isMedia && !mediaUrl && !msgContent) return null;
 
   const timestamp = data._receivedAtISO
     || (data._receivedAt?.toDate ? data._receivedAt.toDate().toISOString() : null)
@@ -285,12 +291,19 @@ function parseUmblerWebhookToMessage(docId, data) {
 
   const source = detectSourceFromWebhook(data);
 
+  let displayContent = msgContent;
+  if (isAudio) displayContent = '[Áudio]';
+  else if (isImage) displayContent = msgContent || '[Imagem]';
+  else if (isFile) displayContent = msgContent || `[Arquivo: ${fileName}]`;
+
   return {
     id: docId,
     audio: isAudio,
     chat_phone: phoneNumber,
-    content: isAudio ? '[Áudio]' : (isImage ? '[Imagem]' : msgContent),
+    content: displayContent,
     image: isImage ? mediaUrl : '',
+    file: isFile ? mediaUrl : '',
+    fileName: isFile ? fileName : '',
     name: contact.Name || contact.DisplayName || '',
     source,
     timestamp,
@@ -326,8 +339,9 @@ const updateWebhookMessagesCache = async () => {
       const data = doc.data();
       const parsed = parseUmblerWebhookToMessage(doc.id, data);
 
-      // Descartar webhooks sem conteúdo útil
-      if (!parsed.content && !parsed.audio && !parsed.image) return;
+      // Descartar webhooks sem conteúdo útil (incluindo status/leitura retornados como null)
+      if (!parsed) return;
+      if (!parsed.content && !parsed.audio && !parsed.image && !parsed.file) return;
       // Descartar se não tem telefone válido
       if (!parsed.chat_phone || parsed.chat_phone.length < 8) return;
 
@@ -462,6 +476,7 @@ const getMergedMessages = async (phone, limit = 50) => {
       if (timeDiff >= 2000) return false;
       // Para mensagens de mídia com URLs diferentes, não são duplicatas
       if (msg.image && existing.image && msg.image !== existing.image) return false;
+      if (msg.file && existing.file && msg.file !== existing.file) return false;
       return true;
     });
     if (dupIndex === -1) {
@@ -469,7 +484,7 @@ const getMergedMessages = async (phone, limit = 50) => {
     } else {
       // Se o novo msg tem mais dados (ex: image URL), substituir o existente
       const existing = deduplicated[dupIndex];
-      if ((!existing.image && msg.image) || (!existing.audio && msg.audio)) {
+      if ((!existing.image && msg.image) || (!existing.audio && msg.audio) || (!existing.file && msg.file)) {
         deduplicated[dupIndex] = msg;
       }
     }

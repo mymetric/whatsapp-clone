@@ -745,6 +745,11 @@ Instruções:
                       📷 Imagem anexada
                     </a>
                   )}
+                  {msg.file && (
+                    <a href={msg.file} target="_blank" rel="noopener noreferrer" className="whatsapp-file-link">
+                      📎 {msg.fileName || 'Arquivo'}
+                    </a>
+                  )}
                   {msg.content}
                 </div>
               </div>

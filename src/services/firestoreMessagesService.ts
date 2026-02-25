@@ -8,6 +8,8 @@ export interface FirestoreMessage {
   chat_phone: string;
   content: string;
   image: string;
+  file?: string;
+  fileName?: string;
   name: string;
   source: 'Contact' | 'Bot' | string;
   timestamp: string | null;

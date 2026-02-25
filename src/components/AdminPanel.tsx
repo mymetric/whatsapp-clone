@@ -205,6 +205,48 @@ const AdminPanel: React.FC = () => {
     }
   };
 
+  const resolveReport = async (id: string) => {
+    try {
+      const res = await apiFetch(`/api/error-reports/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'resolved' }),
+      });
+      if (!res.ok) throw new Error('Erro ao resolver report');
+      setErrorReports(prev => prev.map(r => r.id === id ? { ...r, status: 'resolved' } : r));
+      showMessage('success', 'Report marcado como resolvido');
+    } catch (err: any) {
+      showMessage('error', err.message);
+    }
+  };
+
+  const reopenReport = async (id: string) => {
+    try {
+      const res = await apiFetch(`/api/error-reports/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'open' }),
+      });
+      if (!res.ok) throw new Error('Erro ao reabrir report');
+      setErrorReports(prev => prev.map(r => r.id === id ? { ...r, status: 'open' } : r));
+      showMessage('success', 'Report reaberto');
+    } catch (err: any) {
+      showMessage('error', err.message);
+    }
+  };
+
+  const deleteReport = async (id: string) => {
+    if (!window.confirm('Tem certeza que deseja deletar este report?')) return;
+    try {
+      const res = await apiFetch(`/api/error-reports/${id}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) throw new Error('Erro ao deletar report');
+      setErrorReports(prev => prev.filter(r => r.id !== id));
+      showMessage('success', 'Report deletado');
+    } catch (err: any) {
+      showMessage('error', err.message);
+    }
+  };
+
   const formatDate = (iso: string) => {
     try {
       const d = new Date(iso);
@@ -434,6 +476,14 @@ const AdminPanel: React.FC = () => {
                           {report.leadName && <span>Lead: <strong>{report.leadName}</strong></span>}
                           {report.url && <span className="admin-report-url">{report.url}</span>}
                         </div>
+                        <div className="admin-report-actions">
+                          <button className="admin-btn admin-btn-success" onClick={() => resolveReport(report.id)}>
+                            Resolver
+                          </button>
+                          <button className="admin-btn admin-btn-danger" onClick={() => deleteReport(report.id)}>
+                            Deletar
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </>
@@ -451,6 +501,14 @@ const AdminPanel: React.FC = () => {
                         <div className="admin-report-meta">
                           <span>Por: <strong>{report.reportedByName || report.reportedBy}</strong></span>
                           {report.leadName && <span>Lead: <strong>{report.leadName}</strong></span>}
+                        </div>
+                        <div className="admin-report-actions">
+                          <button className="admin-btn admin-btn-secondary" onClick={() => reopenReport(report.id)}>
+                            Reabrir
+                          </button>
+                          <button className="admin-btn admin-btn-danger" onClick={() => deleteReport(report.id)}>
+                            Deletar
+                          </button>
                         </div>
                       </div>
                     ))}

@@ -467,6 +467,14 @@
   white-space: nowrap;
 }
 
+.admin-report-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #f1f5f9;
+}
+
 /* Responsive */
 @media (max-width: 1024px) {
   .admin-new-user-form {

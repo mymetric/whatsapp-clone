@@ -1,4 +1,4 @@
-const { getDb, setCors, validateAuth } = require('../lib/firebase-admin');
+const { getDb, setCors, validateAuth } = require('../../lib/firebase-admin');
 
 module.exports = async (req, res) => {
   setCors(res, 'GET, POST, OPTIONS');

@@ -3030,6 +3030,8 @@ async function processQueueItem(itemId) {
       const result = await extractTextFromDocx(mediaBuffer, item.mediaMimeType);
       extractedText = result.text;
       processingMethod = result.method;
+    } else if (mediaType === 'video') {
+      processingMethod = 'skipped-video';
     }
 
     // Upload para GCS
@@ -3042,9 +3044,13 @@ async function processQueueItem(itemId) {
       // GCS upload não fatal — continua sem salvar
     }
 
-    // Sucesso
+    // Se não extraiu texto e não é vídeo, marcar como needs_review
+    const finalStatus = (!extractedText || !extractedText.trim()) && mediaType !== 'video'
+      ? 'needs_review'
+      : 'done';
+
     await queueRef.update({
-      status: 'done',
+      status: finalStatus,
       extractedText,
       processingMethod,
       gcsUrl,
@@ -3053,7 +3059,7 @@ async function processQueueItem(itemId) {
       error: null,
     });
 
-    console.log(`✅ [${itemId}] ${extractedText.length} chars via ${processingMethod}`);
+    console.log(`${finalStatus === 'done' ? '✅' : '⚠️'} [${itemId}] ${extractedText.length} chars via ${processingMethod} → ${finalStatus}`);
     emitSSE('done', { id: itemId, fileName: item.mediaFileName, mediaType, phone: item.sourcePhone, method: processingMethod, chars: extractedText.length });
     return { success: true, extractedText, processingMethod, gcsUrl };
   } catch (err) {

@@ -38,8 +38,8 @@ export interface FileProcessingItem {
   mediaUrl: string;
   mediaFileName: string;
   mediaMimeType: string;
-  mediaType: 'image' | 'audio' | 'pdf' | 'docx';
-  status: 'queued' | 'processing' | 'done' | 'error';
+  mediaType: 'image' | 'audio' | 'pdf' | 'docx' | 'video';
+  status: 'queued' | 'processing' | 'done' | 'error' | 'needs_review';
   extractedText: string | null;
   error: string | null;
   processingMethod: string | null;

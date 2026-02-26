@@ -326,7 +326,7 @@ const FileProcessingTab: React.FC = () => {
   };
 
   const handleReprocessReview = async () => {
-    const reviewItems = queueItems.filter(i => i.status === 'done' && (!i.extractedText || i.extractedText.trim().length === 0));
+    const reviewItems = queueItems.filter(i => i.status === 'needs_review' || (i.status === 'done' && (!i.extractedText || i.extractedText.trim().length === 0)));
     if (reviewItems.length === 0) return;
     setReprocessingReview(true);
     setReprocessedCount(0);
@@ -434,7 +434,10 @@ const FileProcessingTab: React.FC = () => {
   };
 
   const getFilteredReview = (): FileProcessingItem[] => {
-    let filtered = queueItems.filter(i => i.status === 'done' && (!i.extractedText || i.extractedText.trim().length === 0) && i.mediaType !== 'audio');
+    let filtered = queueItems.filter(i =>
+      i.status === 'needs_review' ||
+      (i.status === 'done' && (!i.extractedText || i.extractedText.trim().length === 0) && i.mediaType !== 'audio')
+    );
 
     if (filterType !== 'all') {
       filtered = filtered.filter(i => i.mediaType === filterType);
@@ -472,7 +475,11 @@ const FileProcessingTab: React.FC = () => {
 
   // Stats
   const doneItems = queueItems.filter(i => i.status === 'done');
-  const reviewItems = doneItems.filter(i => (!i.extractedText || i.extractedText.trim().length === 0) && i.mediaType !== 'audio');
+  const needsReviewItems = queueItems.filter(i => i.status === 'needs_review');
+  const reviewItems = [
+    ...needsReviewItems,
+    ...doneItems.filter(i => (!i.extractedText || i.extractedText.trim().length === 0) && i.mediaType !== 'audio'),
+  ];
   const doneWithText = doneItems.filter(i => i.extractedText && i.extractedText.trim().length > 0);
   const errorItems = queueItems.filter(i => i.status === 'error');
   const queuedActive = queueItems.filter(i => i.status === 'queued' || i.status === 'processing');

@@ -163,6 +163,9 @@ async function processQueueItem(db, itemId) {
       const result = await extractTextFromDocx(mediaBuffer, item.mediaMimeType);
       extractedText = result.text;
       processingMethod = result.method;
+    } else if (mediaType === 'video') {
+      // Vídeos não são processáveis para extração de texto
+      processingMethod = 'skipped-video';
     }
 
     // Upload GCS
@@ -174,8 +177,13 @@ async function processQueueItem(db, itemId) {
       console.warn('GCS upload falhou (não fatal):', gcsErr.message);
     }
 
+    // Se não extraiu texto e não é vídeo, marcar como needs_review ao invés de done
+    const finalStatus = (!extractedText || !extractedText.trim()) && mediaType !== 'video'
+      ? 'needs_review'
+      : 'done';
+
     await queueRef.update({
-      status: 'done', extractedText, processingMethod, gcsUrl, gcsPath,
+      status: finalStatus, extractedText, processingMethod, gcsUrl, gcsPath,
       processedAt: new Date().toISOString(), error: null,
     });
 

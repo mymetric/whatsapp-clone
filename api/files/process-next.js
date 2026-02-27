@@ -59,7 +59,7 @@ async function extractTextFromPDF(pdfBuffer, mediaUrl) {
 
   if (pdfText.length > 50) return { text: pdfText, method: 'pdf-parse' };
 
-  // Fallback: Vision OCR via URL
+  // Fallback: Vision OCR via URL (GCS ou original)
   try {
     const ocrText = await ocrWithGoogleVision(mediaUrl);
     if (ocrText.trim().length > pdfText.length) return { text: ocrText, method: 'google-vision-pdf' };
@@ -141,22 +141,45 @@ async function processQueueItem(db, itemId) {
 
     // Download
     console.log(`Baixando: ${mediaUrl}`);
-    const mediaResponse = await axios.get(mediaUrl, { responseType: 'arraybuffer', timeout: 60000 });
-    const mediaBuffer = Buffer.from(mediaResponse.data);
+    let mediaResponse = await axios.get(mediaUrl, { responseType: 'arraybuffer', timeout: 60000 });
+    let mediaBuffer = Buffer.from(mediaResponse.data);
+
+    // Webhook.site retorna HTML com meta refresh ao invés de redirect direto
+    if (mediaBuffer.length > 0 && mediaBuffer[0] === 0x3C) {
+      const htmlContent = mediaBuffer.toString('utf8', 0, Math.min(mediaBuffer.length, 2000));
+      const metaMatch = htmlContent.match(/url='([^']+)'/i) || htmlContent.match(/url="([^"]+)"/i);
+      if (metaMatch && metaMatch[1]) {
+        console.log(`Redirect detectado → ${metaMatch[1].substring(0, 80)}`);
+        mediaResponse = await axios.get(metaMatch[1], { responseType: 'arraybuffer', timeout: 60000 });
+        mediaBuffer = Buffer.from(mediaResponse.data);
+      }
+    }
+
+    // Upload GCS primeiro — a URL pública é usada para OCR (evita problemas com redirect)
+    let gcsUrl = null, gcsPath = null;
+    const mediaType = item.mediaType;
+    try {
+      gcsPath = `file-processing/${mediaType}/${item.webhookId}/${item.mediaFileName}`;
+      gcsUrl = await uploadToGCS(mediaBuffer, gcsPath, item.mediaMimeType);
+    } catch (gcsErr) {
+      console.warn('GCS upload falhou (não fatal):', gcsErr.message);
+    }
+
+    // URL confiável para OCR: GCS (pública) > mediaUrl original
+    const ocrUrl = gcsUrl || mediaUrl;
 
     // Processar por tipo
     let extractedText = '';
     let processingMethod = '';
-    const mediaType = item.mediaType;
 
     if (mediaType === 'image') {
-      extractedText = await ocrWithGoogleVision(mediaUrl);
+      extractedText = await ocrWithGoogleVision(ocrUrl);
       processingMethod = 'google-vision-ocr';
     } else if (mediaType === 'audio') {
       extractedText = await transcribeWithAssemblyAI(mediaBuffer);
       processingMethod = 'assemblyai';
     } else if (mediaType === 'pdf') {
-      const result = await extractTextFromPDF(mediaBuffer, mediaUrl);
+      const result = await extractTextFromPDF(mediaBuffer, ocrUrl);
       extractedText = result.text;
       processingMethod = result.method;
     } else if (mediaType === 'docx') {
@@ -164,17 +187,7 @@ async function processQueueItem(db, itemId) {
       extractedText = result.text;
       processingMethod = result.method;
     } else if (mediaType === 'video') {
-      // Vídeos não são processáveis para extração de texto
       processingMethod = 'skipped-video';
-    }
-
-    // Upload GCS
-    let gcsUrl = null, gcsPath = null;
-    try {
-      gcsPath = `file-processing/${mediaType}/${item.webhookId}/${item.mediaFileName}`;
-      gcsUrl = await uploadToGCS(mediaBuffer, gcsPath, item.mediaMimeType);
-    } catch (gcsErr) {
-      console.warn('GCS upload falhou (não fatal):', gcsErr.message);
     }
 
     // Se não extraiu texto e não é vídeo, marcar como needs_review ao invés de done

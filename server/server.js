@@ -2765,10 +2765,10 @@ async function ocrScannedPDFPages(pdfBuffer, webhookId) {
   };
 }
 
-// Helper: Extrair texto de PDF (pdf-parse + fallback OCR por página + fallback Vision via URL)
+// Helper: Extrair texto de PDF (pdf-parse + fallback OCR por página + fallback Vision via buffer)
 // PDFs que são prints/scans retornam pouco texto via pdf-parse — threshold de 50 chars
 // Fallback 1: OCR por página (renderiza cada página como imagem)
-// Fallback 2: Vision via URL original (legado)
+// Fallback 2: Vision via buffer (base64)
 async function extractTextFromPDF(pdfBuffer, mediaUrl, webhookId) {
   let pdfText = '';
   try {
@@ -3011,19 +3011,32 @@ async function processQueueItem(itemId) {
     const redirectInfo = redirected ? ' [redirect]' : '';
     console.log(`⚙️ [${itemId}] ${item.mediaFileName} | ${mediaBuffer.length}b ${mediaType}${typeInfo}${redirectInfo}`);
 
+    // Upload GCS primeiro — a URL pública é usada para OCR (evita redirect webhook.site)
+    let gcsUrl = null;
+    let gcsPath = null;
+    try {
+      gcsPath = `file-processing/${mediaType}/${item.webhookId}/${item.mediaFileName}`;
+      gcsUrl = await uploadToGCS(mediaBuffer, gcsPath, item.mediaMimeType);
+    } catch (gcsErr) {
+      // GCS upload não fatal — continua sem salvar
+    }
+
+    // URL confiável para OCR: GCS (pública) > mediaUrl original
+    const ocrUrl = gcsUrl || mediaUrl;
+
     // Classificar e processar
     let extractedText = '';
     let processingMethod = '';
 
     emitSSE('processing', { id: itemId, step: 'extracting', fileName: item.mediaFileName, mediaType, phone: item.sourcePhone });
     if (mediaType === 'image') {
-      extractedText = await ocrWithGoogleVision(mediaUrl);
+      extractedText = await ocrWithGoogleVision(ocrUrl);
       processingMethod = 'google-vision-ocr';
     } else if (mediaType === 'audio') {
       extractedText = await transcribeWithAssemblyAI(mediaBuffer);
       processingMethod = 'assemblyai';
     } else if (mediaType === 'pdf') {
-      const result = await extractTextFromPDF(mediaBuffer, mediaUrl, item.webhookId);
+      const result = await extractTextFromPDF(mediaBuffer, ocrUrl, item.webhookId);
       extractedText = result.text;
       processingMethod = result.method;
     } else if (mediaType === 'docx') {
@@ -3032,16 +3045,6 @@ async function processQueueItem(itemId) {
       processingMethod = result.method;
     } else if (mediaType === 'video') {
       processingMethod = 'skipped-video';
-    }
-
-    // Upload para GCS
-    let gcsUrl = null;
-    let gcsPath = null;
-    try {
-      gcsPath = `file-processing/${mediaType}/${item.webhookId}/${item.mediaFileName}`;
-      gcsUrl = await uploadToGCS(mediaBuffer, gcsPath, item.mediaMimeType);
-    } catch (gcsErr) {
-      // GCS upload não fatal — continua sem salvar
     }
 
     // Se não extraiu texto e não é vídeo, marcar como needs_review

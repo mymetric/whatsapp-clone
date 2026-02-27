@@ -72,47 +72,39 @@ function extractImageFromPDF(pdfBuffer) {
 
 // ── Extração de PDF ──
 async function extractTextFromPDF(pdfBuffer, mediaUrl, uploadFn) {
-  console.log(`extractTextFromPDF: buffer ${pdfBuffer.length} bytes, url ${mediaUrl?.substring(0, 60)}`);
   let pdfText = '';
   try {
     const { extractText } = await import('unpdf');
-    const data = new Uint8Array(pdfBuffer.buffer, pdfBuffer.byteOffset, pdfBuffer.byteLength);
-    const result = await extractText(data, { mergePages: true });
+    // IMPORTANTE: unpdf/pdfjs detach o ArrayBuffer subjacente, destruindo o buffer original.
+    // Criar uma cópia para preservar pdfBuffer para os fallbacks.
+    const copy = new Uint8Array(pdfBuffer.length);
+    copy.set(pdfBuffer);
+    const result = await extractText(copy, { mergePages: true });
     pdfText = (result.text || '').trim();
-    console.log(`unpdf extraiu ${pdfText.length} chars: "${pdfText.substring(0, 80)}"`);
   } catch (err) {
     console.warn('pdf-parse falhou:', err.message);
   }
 
   if (pdfText.length > 50) return { text: pdfText, method: 'pdf-parse' };
 
-  console.log(`unpdf insuficiente (${pdfText.length} chars), tentando extrair imagem embutida...`);
-
   // Fallback 1: Extrair imagem embutida do PDF e enviar para Vision OCR
   try {
     const embedded = extractImageFromPDF(pdfBuffer);
-    console.log(`extractImageFromPDF resultado: ${embedded ? `${embedded.mimeType} ${embedded.buffer.length} bytes` : 'null'}`);
     if (embedded && embedded.buffer.length > 5000) {
       console.log(`PDF contém ${embedded.mimeType} embutido (${embedded.buffer.length} bytes), extraindo para OCR`);
       if (uploadFn) {
         const imgPath = mediaUrl.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 60) + '_extracted.' + embedded.ext;
-        console.log(`Uploading imagem extraída para GCS: file-processing/pdf-images/${imgPath}`);
         const imgGcsUrl = await uploadFn(embedded.buffer, `file-processing/pdf-images/${imgPath}`, embedded.mimeType);
-        console.log(`GCS URL da imagem: ${imgGcsUrl}`);
         const ocrText = await ocrWithGoogleVision(imgGcsUrl);
-        console.log(`OCR da imagem extraída: ${ocrText.length} chars`);
         if (ocrText.trim().length > pdfText.length) return { text: ocrText, method: 'google-vision-pdf-image' };
-      } else {
-        console.warn('uploadFn não fornecida, pulando extração de imagem');
       }
     }
   } catch (err) {
-    console.warn('Extração de imagem do PDF falhou:', err.message, err.stack);
+    console.warn('Extração de imagem do PDF falhou:', err.message);
   }
 
   // Fallback 2: Vision OCR direto na URL (funciona para alguns formatos)
   try {
-    console.log(`Tentando Vision OCR direto na URL: ${mediaUrl?.substring(0, 80)}`);
     const ocrText = await ocrWithGoogleVision(mediaUrl);
     if (ocrText.trim().length > pdfText.length) return { text: ocrText, method: 'google-vision-pdf' };
   } catch (err) {
@@ -294,11 +286,9 @@ async function processQueueItem(db, itemId) {
       extractedText = await transcribeWithAssemblyAI(mediaBuffer);
       processingMethod = 'assemblyai';
     } else if (mediaType === 'pdf') {
-      console.log(`Processando PDF: ${item.mediaFileName}, buffer ${mediaBuffer.length} bytes, ocrUrl ${ocrUrl?.substring(0, 60)}`);
       const result = await extractTextFromPDF(mediaBuffer, ocrUrl, uploadToGCS);
       extractedText = result.text;
       processingMethod = result.method;
-      console.log(`PDF resultado: method=${result.method}, text=${(result.text||'').length} chars`);
     } else if (mediaType === 'docx') {
       const result = await extractTextFromDocx(mediaBuffer, item.mediaMimeType);
       extractedText = result.text;

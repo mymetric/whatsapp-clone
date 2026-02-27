@@ -72,15 +72,33 @@ async function extractTextFromPDF(pdfBuffer, mediaUrl) {
 
 // ── Extração de DOCX ──
 async function extractTextFromDocx(buffer, mimeType) {
-  if (!mimeType || mimeType.includes('openxmlformats') || mimeType.includes('docx')) {
-    const mammoth = require('mammoth');
-    const result = await mammoth.extractRawText({ buffer });
-    return { text: result.value || '', method: 'mammoth' };
+  // ZIP e openxmlformats → tentar mammoth (DOCX)
+  if (!mimeType || mimeType.includes('openxmlformats') || mimeType.includes('docx') || mimeType === 'application/zip') {
+    try {
+      const mammoth = require('mammoth');
+      const result = await mammoth.extractRawText({ buffer });
+      if (result.value && result.value.trim()) return { text: result.value, method: 'mammoth' };
+    } catch (err) {
+      console.warn('mammoth falhou:', err.message);
+    }
+    // Se mammoth falhou ou retornou vazio e é ZIP genérico, não é DOCX
+    if (mimeType === 'application/zip') return { text: '', method: 'skipped-zip' };
   }
-  const WordExtractor = require('word-extractor');
-  const extractor = new WordExtractor();
-  const doc = await extractor.extract(buffer);
-  return { text: doc.getBody() || '', method: 'word-extractor' };
+  // DOC antigo (OLE2)
+  if (mimeType === 'application/msword' || mimeType?.includes('msword')) {
+    try {
+      const WordExtractor = require('word-extractor');
+      const extractor = new WordExtractor();
+      const doc = await extractor.extract(buffer);
+      return { text: doc.getBody() || '', method: 'word-extractor' };
+    } catch (err) {
+      console.warn('word-extractor falhou:', err.message);
+      return { text: '', method: 'word-extractor-failed' };
+    }
+  }
+  const mammoth = require('mammoth');
+  const result = await mammoth.extractRawText({ buffer });
+  return { text: result.value || '', method: 'mammoth' };
 }
 
 // ── Upload GCS (com retry para erros de concorrência) ──
@@ -175,16 +193,29 @@ async function processQueueItem(db, itemId) {
       else if (h[0] === 0x47 && h[1] === 0x49 && h[2] === 0x46) mimeType = 'image/gif';
       else if (h[0] === 0x25 && h[1] === 0x50 && h[2] === 0x44 && h[3] === 0x46) mimeType = 'application/pdf';
       else if (h[0] === 0x52 && h[1] === 0x49 && h[2] === 0x46 && h[3] === 0x46) mimeType = 'image/webp';
-      if (mimeType) console.log(`Mime detectado por magic bytes: ${mimeType}`);
+      else if (h[0] === 0x50 && h[1] === 0x4B && h[2] === 0x03 && h[3] === 0x04) mimeType = 'application/zip';
+      else if (h[0] === 0xD0 && h[1] === 0xCF) mimeType = 'application/msword';
+      else if (h[0] === 0x49 && h[1] === 0x44 && h[2] === 0x33) mimeType = 'audio/mpeg';
+      if (mimeType && mimeType !== item.mediaMimeType) console.log(`Mime detectado por magic bytes: ${mimeType}`);
     }
 
-    // Corrigir mediaType se o mime detectado contradiz a classificação original
+    // Corrigir mediaType baseado no mime real (magic bytes > classificação do webhook)
     let mediaType = item.mediaType;
-    if (mimeType.startsWith('application/pdf') && mediaType !== 'pdf') {
-      console.log(`Tipo corrigido: ${mediaType} → pdf (por magic bytes)`);
+    const mLower = mimeType.toLowerCase();
+    if (mLower === 'application/pdf' && mediaType !== 'pdf') {
+      console.log(`Tipo corrigido: ${mediaType} → pdf`);
       mediaType = 'pdf';
-    } else if (mimeType.startsWith('image/') && mediaType !== 'image') {
-      console.log(`Tipo corrigido: ${mediaType} → image (por magic bytes)`);
+    } else if ((mLower === 'application/zip' || mLower.includes('openxmlformats') || mLower === 'application/msword') && mediaType !== 'docx') {
+      console.log(`Tipo corrigido: ${mediaType} → docx`);
+      mediaType = 'docx';
+    } else if (mLower.startsWith('audio/') && mediaType !== 'audio') {
+      console.log(`Tipo corrigido: ${mediaType} → audio`);
+      mediaType = 'audio';
+    } else if (mLower.startsWith('video/') && mediaType !== 'video') {
+      console.log(`Tipo corrigido: ${mediaType} → video`);
+      mediaType = 'video';
+    } else if (mLower.startsWith('image/') && mediaType !== 'image') {
+      console.log(`Tipo corrigido: ${mediaType} → image`);
       mediaType = 'image';
     }
 

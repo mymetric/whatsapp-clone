@@ -113,7 +113,7 @@ async function processQueueItem(db, itemId) {
 
   const item = itemDoc.data();
 
-  await queueRef.update({ status: 'processing', lastAttemptAt: new Date().toISOString() });
+  // status já foi setado para 'processing' pela transação em processNextItem
 
   try {
     const webhookSource = item.webhookSource || 'umbler';
@@ -231,7 +231,7 @@ async function processQueueItem(db, itemId) {
   }
 }
 
-// Busca próximo item queued e processa — retorna resultado sem depender de req/res
+// Busca próximo item queued e processa — usa transação para evitar processamento duplicado
 async function processNextItem() {
   const db = getDb();
   if (!db) throw new Error('Firebase não configurado');
@@ -248,11 +248,30 @@ async function processNextItem() {
     .filter(item => !item.nextRetryAt || item.nextRetryAt <= now)
     .sort((a, b) => (b.receivedAt || b.createdAt || '').localeCompare(a.receivedAt || a.createdAt || ''));
 
-  const nextItem = candidates.length > 0 ? candidates[0] : null;
-  if (!nextItem) return { processed: false };
+  // Tentar claim via transação — se outro processo já pegou, tenta o próximo
+  let claimedId = null;
+  for (const candidate of candidates) {
+    const ref = db.collection('file_processing_queue').doc(candidate.id);
+    try {
+      await db.runTransaction(async (t) => {
+        const doc = await t.get(ref);
+        if (!doc.exists || doc.data().status !== 'queued') {
+          throw new Error('already_claimed');
+        }
+        t.update(ref, { status: 'processing', lastAttemptAt: new Date().toISOString() });
+      });
+      claimedId = candidate.id;
+      break;
+    } catch (err) {
+      if (err.message === 'already_claimed') continue;
+      throw err;
+    }
+  }
 
-  const result = await processQueueItem(db, nextItem.id);
-  return { processed: true, itemId: nextItem.id, ...result };
+  if (!claimedId) return { processed: false };
+
+  const result = await processQueueItem(db, claimedId);
+  return { processed: true, itemId: claimedId, ...result };
 }
 
 const handler = async (req, res) => {

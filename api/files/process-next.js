@@ -1,5 +1,6 @@
 const { getDb, setCors, admin, extractEmailAttachments } = require('../../lib/firebase-admin');
 const axios = require('axios');
+const { GoogleAuth } = require('google-auth-library');
 
 // ── OCR via Google Vision FaaS ──
 const VISION_FAAS_URL = 'https://faas-nyc1-2ef2e6cc.doserverless.co/api/v1/namespaces/fn-40f71f3b-ef29-4735-b9b7-94774d6c5fa7/actions/google_vision';
@@ -16,6 +17,35 @@ async function ocrWithGoogleVision(mediaUrl) {
   const annotations = parsed?.responses?.[0]?.textAnnotations;
   if (!annotations || annotations.length === 0) return '';
   return annotations[0].description || '';
+}
+
+// ── Descrever imagem via Google Vision LABEL_DETECTION (fallback quando OCR vazio) ──
+let _visionAuthClient = null;
+async function describeImageWithVision(imageUrl) {
+  if (!_visionAuthClient) {
+    const auth = new GoogleAuth({
+      credentials: {
+        client_email: process.env.FIREBASE_CLIENT_EMAIL,
+        private_key: (process.env.FIREBASE_PRIVATE_KEY || '').replace(/\\n/g, '\n'),
+      },
+      scopes: ['https://www.googleapis.com/auth/cloud-vision'],
+    });
+    _visionAuthClient = await auth.getClient();
+  }
+  const token = await _visionAuthClient.getAccessToken();
+  const resp = await axios.post(
+    'https://vision.googleapis.com/v1/images:annotate',
+    {
+      requests: [{
+        image: { source: { imageUri: imageUrl } },
+        features: [{ type: 'LABEL_DETECTION', maxResults: 8 }],
+      }],
+    },
+    { headers: { Authorization: `Bearer ${token.token}` }, timeout: 30000 }
+  );
+  const labels = (resp.data?.responses?.[0]?.labelAnnotations || []).map(l => l.description);
+  if (labels.length === 0) return '';
+  return '[Imagem] ' + labels.join(', ');
 }
 
 // ── Transcrição áudio via AssemblyAI ──
@@ -335,6 +365,18 @@ async function processQueueItem(db, itemId) {
     if (mediaType === 'image') {
       extractedText = await ocrWithGoogleVision(ocrUrl);
       processingMethod = 'google-vision-ocr';
+      // Fallback: se OCR não encontrou texto, descrever a imagem via labels
+      if (!extractedText || !extractedText.trim()) {
+        try {
+          const description = await describeImageWithVision(ocrUrl);
+          if (description) {
+            extractedText = description;
+            processingMethod = 'google-vision-labels';
+          }
+        } catch (err) {
+          console.warn('Label detection falhou:', err.message);
+        }
+      }
     } else if (mediaType === 'audio') {
       extractedText = await transcribeWithAssemblyAI(mediaBuffer);
       processingMethod = 'assemblyai';

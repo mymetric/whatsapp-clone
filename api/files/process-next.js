@@ -166,12 +166,24 @@ async function processQueueItem(db, itemId) {
       }
     }
 
+    // Detectar mime type por magic bytes se não veio do webhook
+    let mimeType = item.mediaMimeType || '';
+    if (!mimeType && mediaBuffer.length >= 4) {
+      const h = mediaBuffer.slice(0, 4);
+      if (h[0] === 0xFF && h[1] === 0xD8) mimeType = 'image/jpeg';
+      else if (h[0] === 0x89 && h[1] === 0x50 && h[2] === 0x4E && h[3] === 0x47) mimeType = 'image/png';
+      else if (h[0] === 0x47 && h[1] === 0x49 && h[2] === 0x46) mimeType = 'image/gif';
+      else if (h[0] === 0x25 && h[1] === 0x50 && h[2] === 0x44 && h[3] === 0x46) mimeType = 'application/pdf';
+      else if (h[0] === 0x52 && h[1] === 0x49 && h[2] === 0x46 && h[3] === 0x46) mimeType = 'image/webp';
+      if (mimeType) console.log(`Mime detectado por magic bytes: ${mimeType}`);
+    }
+
     // Upload GCS primeiro — a URL pública é usada para OCR (evita problemas com redirect)
     let gcsUrl = null, gcsPath = null;
     const mediaType = item.mediaType;
     try {
       gcsPath = `file-processing/${mediaType}/${item.webhookId}/${item.mediaFileName}`;
-      gcsUrl = await uploadToGCS(mediaBuffer, gcsPath, item.mediaMimeType);
+      gcsUrl = await uploadToGCS(mediaBuffer, gcsPath, mimeType);
     } catch (gcsErr) {
       console.warn('GCS upload falhou (não fatal):', gcsErr.message);
     }

@@ -150,36 +150,75 @@ function extractImageFromPDF(pdfBuffer) {
       }
     }
 
-    // 3. FlateDecode: imagem raw RGB comprimida com zlib
-    if (content.includes('/FlateDecode')) {
-      const widthMatch = content.match(/\/Width\s+(\d+)/);
-      const heightMatch = content.match(/\/Height\s+(\d+)/);
-      if (widthMatch && heightMatch) {
-        const width = parseInt(widthMatch[1]);
-        const height = parseInt(heightMatch[1]);
-        if (width >= 100 && height >= 100) {
-          const zlib = require('zlib');
-          let bestRgb = null;
-          for (const s of streams) {
-            const rawStream = pdfBuffer.slice(s.dataStart, s.endIdx);
-            try {
-              const dec = zlib.inflateSync(rawStream);
-              if (dec.length === width * height * 3) { bestRgb = dec; break; }
-            } catch (_) {}
-          }
-          if (bestRgb) {
-            console.log(`FlateDecode: imagem ${width}x${height} RGB (${bestRgb.length} bytes), convertendo para JPEG`);
-            const jpeg = require('jpeg-js');
-            const rgbaData = Buffer.alloc(width * height * 4);
+    // 3. Imagem raster: FlateDecode (zlib) ou raw, RGB/Grayscale/1-bit
+    {
+      // Encontrar a maior imagem no PDF
+      const allWidths = [...content.matchAll(/\/Width\s+(\d+)/g)].map(m => parseInt(m[1]));
+      const allHeights = [...content.matchAll(/\/Height\s+(\d+)/g)].map(m => parseInt(m[1]));
+      const bpcMatch = content.match(/\/BitsPerComponent\s+(\d+)/);
+      const bpc = bpcMatch ? parseInt(bpcMatch[1]) : 8;
+      const isGray = content.includes('/DeviceGray');
+      // Pegar a maior dimensão (imagem principal, não logos)
+      let width = 0, height = 0;
+      for (let i = 0; i < allWidths.length; i++) {
+        if (allWidths[i] * (allHeights[i] || 0) > width * height) {
+          width = allWidths[i];
+          height = allHeights[i] || 0;
+        }
+      }
+      if (width >= 100 && height >= 100) {
+        const zlib = require('zlib');
+        const channels = isGray ? 1 : 3;
+        const expectedRgb = width * height * channels;
+        const expected1bit = Math.ceil(width / 8) * height;
+        // Tentar todos os streams: inflate ou raw
+        let pixelData = null;
+        let dataType = null;
+        for (const s of streams) {
+          const rawStream = pdfBuffer.slice(s.dataStart, s.endIdx);
+          // Tentar inflate
+          let data = null;
+          try { data = zlib.inflateSync(rawStream); } catch (_) { data = rawStream; }
+          if (data.length === expectedRgb) { pixelData = data; dataType = 'rgb'; break; }
+          if (data.length === expected1bit) { pixelData = data; dataType = '1bit'; break; }
+          // +/- 1 byte tolerance (trailing newline)
+          if (Math.abs(data.length - expectedRgb) <= 1) { pixelData = data.slice(0, expectedRgb); dataType = 'rgb'; break; }
+        }
+        if (pixelData) {
+          const jpeg = require('jpeg-js');
+          const rgbaData = Buffer.alloc(width * height * 4);
+          if (dataType === '1bit') {
+            // 1-bit grayscale → RGBA
+            console.log(`PDF 1-bit grayscale ${width}x${height}, convertendo para JPEG`);
+            const rowBytes = Math.ceil(width / 8);
+            for (let y = 0; y < height; y++) {
+              for (let x = 0; x < width; x++) {
+                const byteIdx = y * rowBytes + Math.floor(x / 8);
+                const bitIdx = 7 - (x % 8);
+                const val = (pixelData[byteIdx] >> bitIdx) & 1 ? 255 : 0;
+                const px = (y * width + x) * 4;
+                rgbaData[px] = val; rgbaData[px + 1] = val; rgbaData[px + 2] = val; rgbaData[px + 3] = 255;
+              }
+            }
+          } else if (channels === 1) {
+            // 8-bit grayscale → RGBA
+            console.log(`PDF grayscale ${width}x${height}, convertendo para JPEG`);
             for (let i = 0; i < width * height; i++) {
-              rgbaData[i * 4] = bestRgb[i * 3];
-              rgbaData[i * 4 + 1] = bestRgb[i * 3 + 1];
-              rgbaData[i * 4 + 2] = bestRgb[i * 3 + 2];
+              const v = pixelData[i];
+              rgbaData[i * 4] = v; rgbaData[i * 4 + 1] = v; rgbaData[i * 4 + 2] = v; rgbaData[i * 4 + 3] = 255;
+            }
+          } else {
+            // RGB → RGBA
+            console.log(`PDF RGB ${width}x${height} (${pixelData.length} bytes), convertendo para JPEG`);
+            for (let i = 0; i < width * height; i++) {
+              rgbaData[i * 4] = pixelData[i * 3];
+              rgbaData[i * 4 + 1] = pixelData[i * 3 + 1];
+              rgbaData[i * 4 + 2] = pixelData[i * 3 + 2];
               rgbaData[i * 4 + 3] = 255;
             }
-            const encoded = jpeg.encode({ data: rgbaData, width, height }, 75);
-            return { buffer: Buffer.from(encoded.data), mimeType: 'image/jpeg', ext: 'jpg' };
           }
+          const encoded = jpeg.encode({ data: rgbaData, width, height }, 75);
+          return { buffer: Buffer.from(encoded.data), mimeType: 'image/jpeg', ext: 'jpg' };
         }
       }
     }

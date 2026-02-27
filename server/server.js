@@ -2824,7 +2824,7 @@ async function extractTextFromDocx(buffer, mimeType) {
   return { text: doc.getBody() || '', method: 'word-extractor' };
 }
 
-// Helper: Upload para GCS usando Firebase Admin SDK
+// Helper: Upload para GCS usando Firebase Admin SDK (com retry para erros de concorrência)
 async function uploadToGCS(buffer, gcsPath, mimeType) {
   const bucketName = process.env.GCS_BUCKET_NAME;
   if (!bucketName) throw new Error('GCS_BUCKET_NAME não configurada');
@@ -2832,13 +2832,22 @@ async function uploadToGCS(buffer, gcsPath, mimeType) {
   const bucket = admin.storage().bucket(bucketName);
   const file = bucket.file(gcsPath);
 
-  await file.save(buffer, {
-    metadata: { contentType: mimeType },
-  });
-
-  // Make publicly readable
-  await file.makePublic();
-  return `https://storage.googleapis.com/${bucketName}/${gcsPath}`;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await file.save(buffer, {
+        metadata: { contentType: mimeType },
+      });
+      await file.makePublic();
+      return `https://storage.googleapis.com/${bucketName}/${gcsPath}`;
+    } catch (err) {
+      if (attempt < 2 && err.message && err.message.includes('edited during the operation')) {
+        console.warn(`GCS upload retry ${attempt + 1}/2: ${err.message}`);
+        await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 // Helper: Detectar tipo de arquivo por magic bytes (file signature)

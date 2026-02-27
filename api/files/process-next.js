@@ -75,7 +75,7 @@ async function transcribeWithAssemblyAI(audioBuffer) {
   throw new Error('AssemblyAI: timeout aguardando transcrição');
 }
 
-// ── Extrair imagem embutida de PDF (JPEG direto ou FlateDecode RGB→JPEG) ──
+// ── Extrair imagem embutida de PDF (JPEG direto, DCTDecode, ou FlateDecode RGB→JPEG) ──
 function extractImageFromPDF(pdfBuffer) {
   // 1. JPEG direto: procurar FF D8 FF ... FF D9
   let jpegStart = -1;
@@ -98,22 +98,12 @@ function extractImageFromPDF(pdfBuffer) {
     }
   }
 
-  // 2. FlateDecode: imagem raw RGB comprimida com zlib dentro do PDF
-  try {
-    const content = pdfBuffer.toString('latin1');
-    // Verificar se tem Image XObject com FlateDecode
-    if (!content.includes('/Subtype /Image') || !content.includes('/FlateDecode')) return null;
+  const content = pdfBuffer.toString('latin1');
+  if (!content.includes('/Subtype /Image')) return null;
 
-    const widthMatch = content.match(/\/Width\s+(\d+)/);
-    const heightMatch = content.match(/\/Height\s+(\d+)/);
-    if (!widthMatch || !heightMatch) return null;
-    const width = parseInt(widthMatch[1]);
-    const height = parseInt(heightMatch[1]);
-    if (width < 100 || height < 100) return null;
-
-    // Encontrar o maior stream (que é a imagem)
-    const zlib = require('zlib');
-    let bestRgb = null;
+  // Helper: encontrar todos os streams do PDF
+  function findStreams() {
+    const streams = [];
     let pos = 0;
     while (true) {
       const idx1 = content.indexOf('stream\r\n', pos);
@@ -123,34 +113,80 @@ function extractImageFromPDF(pdfBuffer) {
       const hLen = content[sIdx + 6] === '\r' ? 8 : 7;
       const dataStart = sIdx + hLen;
       const endIdx = content.indexOf('endstream', dataStart);
-      if (endIdx < 0) { pos = dataStart; continue; }
-      const rawStream = pdfBuffer.slice(dataStart, endIdx);
-      try {
-        const dec = zlib.inflateSync(rawStream);
-        if (dec.length === width * height * 3) {
-          bestRgb = dec;
-          break;
-        }
-      } catch (_) { /* stream não é zlib válido */ }
-      pos = endIdx;
+      if (endIdx < 0) { pos = dataStart + 1; continue; }
+      // Checar contexto antes do stream para determinar o tipo de filtro
+      const preCtx = content.substring(Math.max(0, sIdx - 300), sIdx);
+      streams.push({ dataStart, endIdx, preCtx });
+      pos = endIdx + 9;
     }
-    if (!bestRgb) return null;
-
-    console.log(`FlateDecode: imagem ${width}x${height} RGB (${bestRgb.length} bytes), convertendo para JPEG`);
-    const jpeg = require('jpeg-js');
-    const rgbaData = Buffer.alloc(width * height * 4);
-    for (let i = 0; i < width * height; i++) {
-      rgbaData[i * 4] = bestRgb[i * 3];
-      rgbaData[i * 4 + 1] = bestRgb[i * 3 + 1];
-      rgbaData[i * 4 + 2] = bestRgb[i * 3 + 2];
-      rgbaData[i * 4 + 3] = 255;
-    }
-    const encoded = jpeg.encode({ data: rgbaData, width, height }, 75);
-    return { buffer: Buffer.from(encoded.data), mimeType: 'image/jpeg', ext: 'jpg' };
-  } catch (err) {
-    console.warn('FlateDecode extraction falhou:', err.message);
-    return null;
+    return streams;
   }
+
+  try {
+    const streams = findStreams();
+
+    // 2. DCTDecode: streams que SÃO JPEG dentro do PDF (podem estar wrappados em FlateDecode)
+    if (content.includes('/DCTDecode')) {
+      const zlib = require('zlib');
+      let bestJpeg = null;
+      for (const s of streams) {
+        if (!s.preCtx.includes('/DCTDecode')) continue;
+        let raw = pdfBuffer.slice(s.dataStart, s.endIdx);
+        let end = raw.length;
+        while (end > 0 && (raw[end - 1] === 0x0A || raw[end - 1] === 0x0D)) end--;
+        raw = raw.slice(0, end);
+        // Pode estar wrappado em FlateDecode — tentar inflate primeiro
+        let data = raw;
+        if (raw[0] !== 0xFF && raw.length > 100) {
+          try { data = zlib.inflateSync(raw); } catch (_) {}
+        }
+        if (data.length > 5000 && data[0] === 0xFF && data[1] === 0xD8) {
+          if (!bestJpeg || data.length > bestJpeg.length) bestJpeg = data;
+        }
+      }
+      if (bestJpeg) {
+        console.log(`DCTDecode: JPEG ${bestJpeg.length} bytes extraído do PDF`);
+        return { buffer: Buffer.from(bestJpeg), mimeType: 'image/jpeg', ext: 'jpg' };
+      }
+    }
+
+    // 3. FlateDecode: imagem raw RGB comprimida com zlib
+    if (content.includes('/FlateDecode')) {
+      const widthMatch = content.match(/\/Width\s+(\d+)/);
+      const heightMatch = content.match(/\/Height\s+(\d+)/);
+      if (widthMatch && heightMatch) {
+        const width = parseInt(widthMatch[1]);
+        const height = parseInt(heightMatch[1]);
+        if (width >= 100 && height >= 100) {
+          const zlib = require('zlib');
+          let bestRgb = null;
+          for (const s of streams) {
+            const rawStream = pdfBuffer.slice(s.dataStart, s.endIdx);
+            try {
+              const dec = zlib.inflateSync(rawStream);
+              if (dec.length === width * height * 3) { bestRgb = dec; break; }
+            } catch (_) {}
+          }
+          if (bestRgb) {
+            console.log(`FlateDecode: imagem ${width}x${height} RGB (${bestRgb.length} bytes), convertendo para JPEG`);
+            const jpeg = require('jpeg-js');
+            const rgbaData = Buffer.alloc(width * height * 4);
+            for (let i = 0; i < width * height; i++) {
+              rgbaData[i * 4] = bestRgb[i * 3];
+              rgbaData[i * 4 + 1] = bestRgb[i * 3 + 1];
+              rgbaData[i * 4 + 2] = bestRgb[i * 3 + 2];
+              rgbaData[i * 4 + 3] = 255;
+            }
+            const encoded = jpeg.encode({ data: rgbaData, width, height }, 75);
+            return { buffer: Buffer.from(encoded.data), mimeType: 'image/jpeg', ext: 'jpg' };
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Extração de imagem do PDF falhou:', err.message);
+  }
+  return null;
 }
 
 // ── Extração de PDF ──
@@ -313,8 +349,8 @@ async function processQueueItem(db, itemId) {
 
     // Detectar mime type por magic bytes quando mime está ausente ou genérico
     let mimeType = item.mediaMimeType || '';
-    if ((!mimeType || mimeType === 'application/octet-stream') && mediaBuffer.length >= 4) {
-      const h = mediaBuffer.slice(0, 4);
+    if ((!mimeType || mimeType === 'application/octet-stream' || mimeType === 'application/x-compressed' || mimeType === 'application/x-zip-compressed') && mediaBuffer.length >= 12) {
+      const h = mediaBuffer.slice(0, 12);
       if (h[0] === 0xFF && h[1] === 0xD8) mimeType = 'image/jpeg';
       else if (h[0] === 0x89 && h[1] === 0x50 && h[2] === 0x4E && h[3] === 0x47) mimeType = 'image/png';
       else if (h[0] === 0x47 && h[1] === 0x49 && h[2] === 0x46) mimeType = 'image/gif';
@@ -323,7 +359,24 @@ async function processQueueItem(db, itemId) {
       else if (h[0] === 0x50 && h[1] === 0x4B && h[2] === 0x03 && h[3] === 0x04) mimeType = 'application/zip';
       else if (h[0] === 0xD0 && h[1] === 0xCF) mimeType = 'application/msword';
       else if (h[0] === 0x49 && h[1] === 0x44 && h[2] === 0x33) mimeType = 'audio/mpeg';
+      else if (h[0] === 0x52 && h[1] === 0x61 && h[2] === 0x72 && h[3] === 0x21) mimeType = 'application/x-rar';
+      else if (h.slice(4, 8).toString('ascii') === 'ftyp') mimeType = 'image/heic';
+      else if (h[0] === 0x4D && h[1] === 0x49 && h[2] === 0x4D && h[3] === 0x45) mimeType = 'message/rfc822';
+      else if (h[0] === 0x3C && h[1] === 0x68 && h[2] === 0x74 && h[3] === 0x6D) mimeType = 'text/html';
       if (mimeType && mimeType !== item.mediaMimeType) console.log(`Mime detectado por magic bytes: ${mimeType}`);
+    }
+
+    // Arquivos não-processáveis: marcar como done com descrição
+    const skipMimes = ['application/x-rar', 'message/rfc822', 'text/html', 'image/heic'];
+    if (skipMimes.includes(mimeType) || mediaBuffer.length < 1000) {
+      const skipReason = mediaBuffer.length < 1000
+        ? `[Arquivo muito pequeno: ${mediaBuffer.length} bytes]`
+        : `[Arquivo ${mimeType.split('/').pop()}: ${item.mediaFileName}]`;
+      await queueRef.update({
+        status: 'done', extractedText: skipReason, processingMethod: 'skipped-' + mimeType.split('/').pop(),
+        processedAt: new Date().toISOString(), error: null,
+      });
+      return { success: true, extractedText: skipReason, processingMethod: 'skipped' };
     }
 
     // Corrigir mediaType baseado no mime real (magic bytes > classificação do webhook)

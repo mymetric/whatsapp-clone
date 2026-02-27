@@ -45,9 +45,9 @@ async function transcribeWithAssemblyAI(audioBuffer) {
   throw new Error('AssemblyAI: timeout aguardando transcrição');
 }
 
-// ── Extrair imagem embutida de PDF (JPEG/PNG) ──
+// ── Extrair imagem embutida de PDF (JPEG direto ou FlateDecode RGB→JPEG) ──
 function extractImageFromPDF(pdfBuffer) {
-  // JPEG: procurar FF D8 FF ... FF D9
+  // 1. JPEG direto: procurar FF D8 FF ... FF D9
   let jpegStart = -1;
   for (let i = 0; i < pdfBuffer.length - 2; i++) {
     if (pdfBuffer[i] === 0xFF && pdfBuffer[i + 1] === 0xD8 && pdfBuffer[i + 2] === 0xFF) {
@@ -67,7 +67,60 @@ function extractImageFromPDF(pdfBuffer) {
       return { buffer: pdfBuffer.slice(jpegStart, jpegEnd), mimeType: 'image/jpeg', ext: 'jpg' };
     }
   }
-  return null;
+
+  // 2. FlateDecode: imagem raw RGB comprimida com zlib dentro do PDF
+  try {
+    const content = pdfBuffer.toString('latin1');
+    // Verificar se tem Image XObject com FlateDecode
+    if (!content.includes('/Subtype /Image') || !content.includes('/FlateDecode')) return null;
+
+    const widthMatch = content.match(/\/Width\s+(\d+)/);
+    const heightMatch = content.match(/\/Height\s+(\d+)/);
+    if (!widthMatch || !heightMatch) return null;
+    const width = parseInt(widthMatch[1]);
+    const height = parseInt(heightMatch[1]);
+    if (width < 100 || height < 100) return null;
+
+    // Encontrar o maior stream (que é a imagem)
+    const zlib = require('zlib');
+    let bestRgb = null;
+    let pos = 0;
+    while (true) {
+      const idx1 = content.indexOf('stream\r\n', pos);
+      const idx2 = content.indexOf('stream\n', pos);
+      const sIdx = (idx1 >= 0 && idx2 >= 0) ? Math.min(idx1, idx2) : (idx1 >= 0 ? idx1 : idx2);
+      if (sIdx < 0) break;
+      const hLen = content[sIdx + 6] === '\r' ? 8 : 7;
+      const dataStart = sIdx + hLen;
+      const endIdx = content.indexOf('endstream', dataStart);
+      if (endIdx < 0) { pos = dataStart; continue; }
+      const rawStream = pdfBuffer.slice(dataStart, endIdx);
+      try {
+        const dec = zlib.inflateSync(rawStream);
+        if (dec.length === width * height * 3) {
+          bestRgb = dec;
+          break;
+        }
+      } catch (_) { /* stream não é zlib válido */ }
+      pos = endIdx;
+    }
+    if (!bestRgb) return null;
+
+    console.log(`FlateDecode: imagem ${width}x${height} RGB (${bestRgb.length} bytes), convertendo para JPEG`);
+    const jpeg = require('jpeg-js');
+    const rgbaData = Buffer.alloc(width * height * 4);
+    for (let i = 0; i < width * height; i++) {
+      rgbaData[i * 4] = bestRgb[i * 3];
+      rgbaData[i * 4 + 1] = bestRgb[i * 3 + 1];
+      rgbaData[i * 4 + 2] = bestRgb[i * 3 + 2];
+      rgbaData[i * 4 + 3] = 255;
+    }
+    const encoded = jpeg.encode({ data: rgbaData, width, height }, 75);
+    return { buffer: Buffer.from(encoded.data), mimeType: 'image/jpeg', ext: 'jpg' };
+  } catch (err) {
+    console.warn('FlateDecode extraction falhou:', err.message);
+    return null;
+  }
 }
 
 // ── Extração de PDF ──

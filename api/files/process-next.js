@@ -166,9 +166,9 @@ async function processQueueItem(db, itemId) {
       }
     }
 
-    // Detectar mime type por magic bytes se não veio do webhook
+    // Detectar mime type por magic bytes quando mime está ausente ou genérico
     let mimeType = item.mediaMimeType || '';
-    if (!mimeType && mediaBuffer.length >= 4) {
+    if ((!mimeType || mimeType === 'application/octet-stream') && mediaBuffer.length >= 4) {
       const h = mediaBuffer.slice(0, 4);
       if (h[0] === 0xFF && h[1] === 0xD8) mimeType = 'image/jpeg';
       else if (h[0] === 0x89 && h[1] === 0x50 && h[2] === 0x4E && h[3] === 0x47) mimeType = 'image/png';
@@ -178,9 +178,18 @@ async function processQueueItem(db, itemId) {
       if (mimeType) console.log(`Mime detectado por magic bytes: ${mimeType}`);
     }
 
+    // Corrigir mediaType se o mime detectado contradiz a classificação original
+    let mediaType = item.mediaType;
+    if (mimeType.startsWith('application/pdf') && mediaType !== 'pdf') {
+      console.log(`Tipo corrigido: ${mediaType} → pdf (por magic bytes)`);
+      mediaType = 'pdf';
+    } else if (mimeType.startsWith('image/') && mediaType !== 'image') {
+      console.log(`Tipo corrigido: ${mediaType} → image (por magic bytes)`);
+      mediaType = 'image';
+    }
+
     // Upload GCS primeiro — a URL pública é usada para OCR (evita problemas com redirect)
     let gcsUrl = null, gcsPath = null;
-    const mediaType = item.mediaType;
     try {
       gcsPath = `file-processing/${mediaType}/${item.webhookId}/${item.mediaFileName}`;
       gcsUrl = await uploadToGCS(mediaBuffer, gcsPath, mimeType);

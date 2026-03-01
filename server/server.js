@@ -25,7 +25,10 @@ const { getDocumentProxy, renderPageAsImage } = require('unpdf');
 const mammoth = require('mammoth');
 const WordExtractor = require('word-extractor');
 const admin = require('firebase-admin');
+const multer = require('multer');
 require('dotenv').config();
+
+const uploadMulter = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
 // Inicializar Firebase Admin SDK
 let firestoreDb = null;
@@ -3835,6 +3838,73 @@ app.delete('/api/files/queue/:id', async (req, res) => {
   } catch (err) {
     console.error(`❌ [FileProcessing] Erro ao remover ${req.params.id}:`, err.message);
     return res.status(500).json({ error: 'Erro ao remover', details: err.message });
+  }
+});
+
+/**
+ * POST /api/files/upload — Upload manual de arquivo para a fila de processamento
+ */
+app.post('/api/files/upload', uploadMulter.single('file'), async (req, res) => {
+  try {
+    if (!firestoreDb) {
+      return res.status(500).json({ error: 'Firebase não configurado' });
+    }
+
+    const file = req.file;
+    const phone = req.body.phone;
+
+    if (!file) {
+      return res.status(400).json({ error: 'Nenhum arquivo enviado' });
+    }
+    if (!phone) {
+      return res.status(400).json({ error: 'Telefone do lead é obrigatório' });
+    }
+
+    const uuid = crypto.randomUUID();
+    const mediaType = classifyMediaType(file.mimetype);
+    const gcsPath = `file-processing/manual-upload/${uuid}/${file.originalname}`;
+
+    // Upload para GCS
+    const gcsUrl = await uploadToGCS(file.buffer, gcsPath, file.mimetype);
+
+    // Criar documento na fila de processamento
+    const queueDoc = {
+      webhookId: uuid,
+      webhookSource: 'manual-upload',
+      sourcePhone: phone,
+      mediaUrl: gcsUrl,
+      mediaFileName: file.originalname,
+      mediaMimeType: file.mimetype,
+      mediaType: mediaType,
+      thumbnailBase64: null,
+      receivedAt: new Date().toISOString(),
+      status: 'queued',
+      extractedText: null,
+      error: null,
+      processingMethod: null,
+      attempts: 0,
+      maxAttempts: 3,
+      lastAttemptAt: null,
+      nextRetryAt: null,
+      gcsUrl: gcsUrl,
+      gcsPath: gcsPath,
+      processedAt: null,
+      createdAt: new Date().toISOString(),
+    };
+
+    const docRef = await firestoreDb.collection('file_processing_queue').add(queueDoc);
+
+    console.log(`📤 [FileProcessing] Upload manual: ${file.originalname} (${mediaType}) para ${phone} — queueId: ${docRef.id}`);
+
+    return res.json({
+      success: true,
+      queueId: docRef.id,
+      fileName: file.originalname,
+      status: 'queued',
+    });
+  } catch (err) {
+    console.error('❌ [FileProcessing] Erro no upload manual:', err.message);
+    return res.status(500).json({ error: 'Erro ao fazer upload', details: err.message });
   }
 });
 

@@ -40,6 +40,41 @@ interface CopilotMessage {
   timestamp: Date;
 }
 
+interface AiDebugData {
+  timestamp: Date;
+  promptName: string;
+  systemPrompt: string;
+  conversationHistory: string;
+  userPrompt: string;
+  leadContext: string;
+  fullPromptChain: string;
+  systemPromptChars: number;
+  conversationHistoryChars: number;
+  userPromptChars: number;
+  leadContextChars: number;
+  fullPromptChainChars: number;
+  totalChars: number;
+  estimatedTokens: number;
+  messageCount: number;
+  budgetUsedPercent: number;
+}
+
+const AiDebugSection: React.FC<{ title: string; content: string; charCount: number }> = ({ title, content, charCount }) => {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="ai-debug-section">
+      <div className="ai-debug-section-header" onClick={() => setExpanded(!expanded)}>
+        <span className="ai-debug-section-arrow">{expanded ? '▼' : '▶'}</span>
+        <span className="ai-debug-section-title">{title}</span>
+        <span className="ai-debug-section-chars">{charCount.toLocaleString()} chars</span>
+      </div>
+      {expanded && (
+        <pre className="ai-debug-section-content">{content || '(vazio)'}</pre>
+      )}
+    </div>
+  );
+};
+
 const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boardId, onClose, onLeadCreated, defaultTab = 'whatsapp' }) => {
   const { setCurrentLead } = useCurrentLead();
   const [activeTab, setActiveTab] = useState<TabType>(defaultTab);
@@ -101,12 +136,20 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
   const [contextStats, setContextStats] = useState<ContextStats | null>(null);
   const [showContextDetails, setShowContextDetails] = useState(false);
 
+  // Estado para painel de debug IA
+  const [aiDebugData, setAiDebugData] = useState<AiDebugData | null>(null);
+  const [aiDebugPanelOpen, setAiDebugPanelOpen] = useState(false);
+
   // Estados para documentos (usados no contexto do Copiloto)
   const [leadDocuments, setLeadDocuments] = useState<DocumentRecord[]>([]);
   const [documentAnalysis, setDocumentAnalysis] = useState<DocumentAnalysis | null>(null);
   const [documentsLoaded, setDocumentsLoaded] = useState(false);
   const [expandedDocs, setExpandedDocs] = useState<Set<string>>(new Set());
   const [processedFiles, setProcessedFiles] = useState<Array<{id: string; fileName: string; mediaType: string; extractedText: string; processedAt: string}>>([]);
+
+  // Estado para upload de documentos
+  const docUploadInputRef = useRef<HTMLInputElement>(null);
+  const [uploadingDocs, setUploadingDocs] = useState(false);
 
   // Estados para emails
   const [leadEmails, setLeadEmails] = useState<any[]>([]);
@@ -143,6 +186,8 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
     setCopilotFiles([]);
     setContextStats(null);
     setShowContextDetails(false);
+    setAiDebugData(null);
+    setAiDebugPanelOpen(false);
     setActiveTab('whatsapp');
   }, [item.id]);
 
@@ -700,6 +745,33 @@ Instruções:
         ? `Gere uma resposta profissional e adequada para a última mensagem do cliente: "${lastMessage}"`
         : `Gere uma mensagem de abertura profissional e amigável para iniciar uma conversa com este cliente.`;
 
+      // Capturar snapshot dos dados enviados para IA (debug panel)
+      const debugSystemChars = systemContext.length;
+      const debugConvChars = conversationHistory.length;
+      const debugUserChars = userPrompt.length;
+      const debugLeadChars = leadContext.length;
+      const debugChainChars = fullPromptContent.length;
+      const debugTotal = debugSystemChars + debugConvChars + debugUserChars;
+      const budgetChars = contextStats?.budgetChars || 120000;
+      setAiDebugData({
+        timestamp: new Date(),
+        promptName: prompt.name,
+        systemPrompt: systemContext,
+        conversationHistory,
+        userPrompt,
+        leadContext,
+        fullPromptChain: fullPromptContent,
+        systemPromptChars: debugSystemChars,
+        conversationHistoryChars: debugConvChars,
+        userPromptChars: debugUserChars,
+        leadContextChars: debugLeadChars,
+        fullPromptChainChars: debugChainChars,
+        totalChars: debugTotal,
+        estimatedTokens: Math.round(debugTotal / 4),
+        messageCount: msgs.length,
+        budgetUsedPercent: Math.round((debugTotal / budgetChars) * 100),
+      });
+
       const response = await grokService.generateResponse(
         userPrompt,
         {
@@ -1142,223 +1214,286 @@ Instruções:
     });
   };
 
+  // Handler para upload de documentos
+  const handleDocumentUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    const phone = getLeadPhone();
+    if (!phone) {
+      alert('Telefone do lead não encontrado.');
+      return;
+    }
+
+    setUploadingDocs(true);
+    let successCount = 0;
+    let errorCount = 0;
+
+    for (let i = 0; i < files.length; i++) {
+      try {
+        const formData = new FormData();
+        formData.append('file', files[i]);
+        formData.append('phone', phone);
+
+        const res = await fetch('/api/files/upload', { method: 'POST', body: formData });
+        if (res.ok) {
+          successCount++;
+        } else {
+          errorCount++;
+          console.error(`Erro ao enviar ${files[i].name}:`, await res.text());
+        }
+      } catch (err) {
+        errorCount++;
+        console.error(`Erro ao enviar ${files[i].name}:`, err);
+      }
+    }
+
+    setUploadingDocs(false);
+    // Reset input
+    if (docUploadInputRef.current) docUploadInputRef.current.value = '';
+
+    // Recarregar documentos
+    setDocumentsLoaded(false);
+
+    if (errorCount > 0) {
+      alert(`Upload concluído: ${successCount} enviado(s), ${errorCount} erro(s).`);
+    }
+  };
+
   // Renderizar aba de documentos
   const renderDocumentsTab = () => {
+    const hasAnalysis = analysisPrompts.length > 0 || documentAnalysis;
     return (
       <div className="tab-content documents-tab">
-        {/* Seção de Documentos */}
-        <div className="documents-section">
-          <div className="documents-section-header">
-            <span className="documents-icon">📎</span>
-            <h4>Documentos do Lead</h4>
-            {leadDocuments.length > 0 && (
-              <span className="documents-count">{leadDocuments.length}</span>
+        <div className={`docs-layout${hasAnalysis ? ' docs-layout--with-sidebar' : ''}`}>
+          {/* Coluna principal: lista de documentos */}
+          <div className="docs-main">
+            <div className="documents-section">
+              <div className="documents-section-header">
+                <span className="documents-icon">📎</span>
+                <h4>Documentos do Lead</h4>
+                {leadDocuments.length > 0 && (
+                  <span className="documents-count">{leadDocuments.length}</span>
+                )}
+                <input
+                  type="file"
+                  ref={docUploadInputRef}
+                  multiple
+                  accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg,.webp"
+                  style={{ display: 'none' }}
+                  onChange={handleDocumentUpload}
+                />
+                <button
+                  className="doc-upload-btn"
+                  onClick={() => docUploadInputRef.current?.click()}
+                  disabled={uploadingDocs}
+                  title="Enviar documento para processamento"
+                >
+                  {uploadingDocs ? (
+                    <><div className="loading-spinner-tiny"></div> Enviando...</>
+                  ) : (
+                    <>+ Enviar documento</>
+                  )}
+                </button>
+              </div>
+
+              {!documentsLoaded ? (
+                <div className="documents-loading">
+                  <div className="loading-spinner-small"></div>
+                  <span>Carregando documentos...</span>
+                </div>
+              ) : leadDocuments.length === 0 ? (
+                <div className="documents-empty">
+                  <span>Nenhum documento encontrado para este lead</span>
+                </div>
+              ) : (
+                <div className="documents-list">
+                  {leadDocuments.map((doc, idx) => (
+                    <div key={doc.id || idx} className="document-item">
+                      <div className="document-icon">
+                        {doc.origin === 'email' ? '📧' : '📱'}
+                      </div>
+                      <div className="document-content">
+                        <div className="document-header">
+                          <span className="document-title">
+                            {doc.metadata?.subject || doc.name || `Documento ${idx + 1}`}
+                          </span>
+                          <span className={`document-badge ${doc.direction || 'received'}`}>
+                            {doc.direction === 'sent' ? 'Enviado' : 'Recebido'}
+                          </span>
+                          {doc.createdAt && (
+                            <span className="document-date" style={{ marginTop: 0, marginLeft: 'auto' }}>
+                              {new Date(doc.createdAt).toLocaleDateString('pt-BR', {
+                                day: '2-digit', month: '2-digit', year: '2-digit',
+                                hour: '2-digit', minute: '2-digit'
+                              })}
+                            </span>
+                          )}
+                        </div>
+                        {doc.text && (
+                          <div
+                            className={`document-preview ${expandedDocs.has(doc.id || `doc-${idx}`) ? 'expanded' : 'collapsed'}`}
+                            onClick={() => toggleDocExpanded(doc.id || `doc-${idx}`)}
+                          >
+                            <span className="document-text">{doc.text}</span>
+                            <span className="document-expand-toggle">
+                              {expandedDocs.has(doc.id || `doc-${idx}`) ? '▲' : '▼'}
+                            </span>
+                          </div>
+                        )}
+                        {doc.images && doc.images.length > 0 && (
+                          <div className="document-attachments">
+                            {doc.images.map((img, imgIdx) => (
+                              <a
+                                key={img.fileId || imgIdx}
+                                href={img.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="document-attachment"
+                                title={img.extractedText ? 'Clique para abrir (contém texto extraído)' : 'Clique para abrir'}
+                              >
+                                <span className="attachment-icon">📄</span>
+                                <span className="attachment-name">
+                                  Anexo {imgIdx + 1}
+                                  {img.extractedText && <span className="has-text-badge">OCR</span>}
+                                </span>
+                              </a>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Arquivos Processados */}
+            {processedFiles.length > 0 && (
+              <div className="documents-section" style={{ marginTop: '10px' }}>
+                <div className="documents-section-header">
+                  <span className="documents-icon">🗃️</span>
+                  <h4>Arquivos Processados</h4>
+                  <span className="documents-count">{processedFiles.length}</span>
+                </div>
+                <div className="documents-list">
+                  {processedFiles.map((file, idx) => {
+                    const docId = `processed-${file.id}`;
+                    const isExpanded = expandedDocs.has(docId);
+                    const mediaTypeLabel: Record<string, string> = { pdf: 'PDF', docx: 'DOCX', image: 'Imagem', audio: 'Áudio' };
+                    return (
+                      <div key={file.id} className="document-item">
+                        <div className="document-icon">
+                          {file.mediaType === 'pdf' ? '📕' : file.mediaType === 'image' ? '🖼️' : '📄'}
+                        </div>
+                        <div className="document-content">
+                          <div className="document-header">
+                            <span className="document-title">
+                              {file.fileName || `Arquivo ${idx + 1}`}
+                            </span>
+                            <span className="document-badge received">
+                              {mediaTypeLabel[file.mediaType] || file.mediaType || 'Arquivo'}
+                            </span>
+                            {file.processedAt && (
+                              <span className="document-date" style={{ marginTop: 0, marginLeft: 'auto' }}>
+                                {new Date(file.processedAt).toLocaleDateString('pt-BR', {
+                                  day: '2-digit', month: '2-digit', year: '2-digit',
+                                  hour: '2-digit', minute: '2-digit'
+                                })}
+                              </span>
+                            )}
+                          </div>
+                          {file.extractedText && (
+                            <div
+                              className={`document-preview ${isExpanded ? 'expanded' : 'collapsed'}`}
+                              onClick={() => toggleDocExpanded(docId)}
+                            >
+                              <span className="document-text">{file.extractedText}</span>
+                              <span className="document-expand-toggle">
+                                {isExpanded ? '▲' : '▼'}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             )}
           </div>
 
-          {!documentsLoaded ? (
-            <div className="documents-loading">
-              <div className="loading-spinner-small"></div>
-              <span>Carregando documentos...</span>
-            </div>
-          ) : leadDocuments.length === 0 ? (
-            <div className="documents-empty">
-              <span>Nenhum documento encontrado para este lead</span>
-            </div>
-          ) : (
-            <div className="documents-list">
-              {leadDocuments.map((doc, idx) => (
-                <div key={doc.id || idx} className="document-item">
-                  <div className="document-icon">
-                    {doc.origin === 'email' ? '📧' : '📱'}
+          {/* Sidebar: análise */}
+          {hasAnalysis && (
+            <div className="docs-sidebar">
+              {/* Análise por IA */}
+              {analysisPrompts.length > 0 && (
+                <div className="documents-section--analysis">
+                  <div className="documents-section-header">
+                    <span className="documents-icon">🤖</span>
+                    <h4>Análise por IA</h4>
                   </div>
-                  <div className="document-content">
-                    <div className="document-header">
-                      <span className="document-title">
-                        {doc.metadata?.subject || doc.name || `Documento ${idx + 1}`}
-                      </span>
-                      <span className={`document-badge ${doc.direction || 'received'}`}>
-                        {doc.direction === 'sent' ? 'Enviado' : 'Recebido'}
-                      </span>
+                  {!contextReady ? (
+                    <div className="prompts-loading-context">
+                      <div className="prompt-loading-spinner"></div>
+                      <span>Carregando contexto...</span>
                     </div>
-                    {doc.createdAt && (
-                      <div className="document-date">
-                        {new Date(doc.createdAt).toLocaleDateString('pt-BR', {
-                          day: '2-digit',
-                          month: '2-digit',
-                          year: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit'
-                        })}
+                  ) : (
+                    <div className="analysis-prompts-row">
+                      {analysisPrompts.map(prompt => (
+                        <button
+                          key={prompt.id}
+                          onClick={() => handleUseAnalysisPrompt(prompt)}
+                          disabled={generatingAnalysisPrompt !== null}
+                          className={`analysis-prompt-btn${generatingAnalysisPrompt === prompt.id ? ' analysis-prompt-btn--active' : ''}`}
+                          title={prompt.description || prompt.content?.substring(0, 100)}
+                          style={generatingAnalysisPrompt && generatingAnalysisPrompt !== prompt.id ? { opacity: 0.5 } : undefined}
+                        >
+                          {generatingAnalysisPrompt === prompt.id ? '⏳ Gerando...' : prompt.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {analysisResult && (
+                    <div className="analysis-result-box">
+                      <div className="analysis-label">Resultado</div>
+                      <div className="analysis-content">
+                        <ReactMarkdown>{analysisResult}</ReactMarkdown>
                       </div>
-                    )}
-                    {doc.text && (
-                      <div
-                        className={`document-preview ${expandedDocs.has(doc.id || `doc-${idx}`) ? 'expanded' : 'collapsed'}`}
-                        onClick={() => toggleDocExpanded(doc.id || `doc-${idx}`)}
-                      >
-                        <span className="document-text">{doc.text}</span>
-                        <span className="document-expand-toggle">
-                          {expandedDocs.has(doc.id || `doc-${idx}`) ? '▲' : '▼'}
-                        </span>
-                      </div>
-                    )}
-                    {doc.images && doc.images.length > 0 && (
-                      <div className="document-attachments">
-                        {doc.images.map((img, imgIdx) => (
-                          <a
-                            key={img.fileId || imgIdx}
-                            href={img.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="document-attachment"
-                            title={img.extractedText ? 'Clique para abrir (contém texto extraído)' : 'Clique para abrir'}
-                          >
-                            <span className="attachment-icon">📄</span>
-                            <span className="attachment-name">
-                              Anexo {imgIdx + 1}
-                              {img.extractedText && <span className="has-text-badge">OCR</span>}
-                            </span>
-                          </a>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                    </div>
+                  )}
                 </div>
-              ))}
+              )}
+
+              {/* Análise de Documentos do Monday */}
+              {documentAnalysis && (
+                <div className="document-analysis-section">
+                  <div className="documents-section-header">
+                    <span className="documents-icon">🔍</span>
+                    <h4>Análise de Documentos</h4>
+                  </div>
+                  {documentAnalysis.checklist && (
+                    <div className="analysis-block">
+                      <div className="analysis-label">Checklist</div>
+                      <div className="analysis-content">
+                        <ReactMarkdown>{documentAnalysis.checklist}</ReactMarkdown>
+                      </div>
+                    </div>
+                  )}
+                  {documentAnalysis.analise && (
+                    <div className="analysis-block">
+                      <div className="analysis-label">Análise</div>
+                      <div className="analysis-content">
+                        <ReactMarkdown>{documentAnalysis.analise}</ReactMarkdown>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
-
-        {/* Arquivos Processados (file_processing_queue) */}
-        {processedFiles.length > 0 && (
-          <div className="documents-section" style={{ marginTop: '16px' }}>
-            <div className="documents-section-header">
-              <span className="documents-icon">🗃️</span>
-              <h4>Arquivos Processados</h4>
-              <span className="documents-count">{processedFiles.length}</span>
-            </div>
-            <div className="documents-list">
-              {processedFiles.map((file, idx) => {
-                const docId = `processed-${file.id}`;
-                const isExpanded = expandedDocs.has(docId);
-                const mediaTypeLabel: Record<string, string> = { pdf: 'PDF', docx: 'DOCX', image: 'Imagem', audio: 'Áudio' };
-                return (
-                  <div key={file.id} className="document-item">
-                    <div className="document-icon">
-                      {file.mediaType === 'pdf' ? '📕' : file.mediaType === 'image' ? '🖼️' : '📄'}
-                    </div>
-                    <div className="document-content">
-                      <div className="document-header">
-                        <span className="document-title">
-                          {file.fileName || `Arquivo ${idx + 1}`}
-                        </span>
-                        <span className="document-badge received">
-                          {mediaTypeLabel[file.mediaType] || file.mediaType || 'Arquivo'}
-                        </span>
-                      </div>
-                      {file.processedAt && (
-                        <div className="document-date">
-                          {new Date(file.processedAt).toLocaleDateString('pt-BR', {
-                            day: '2-digit', month: '2-digit', year: 'numeric',
-                            hour: '2-digit', minute: '2-digit'
-                          })}
-                        </div>
-                      )}
-                      {file.extractedText && (
-                        <div
-                          className={`document-preview ${isExpanded ? 'expanded' : 'collapsed'}`}
-                          onClick={() => toggleDocExpanded(docId)}
-                        >
-                          <span className="document-text">{file.extractedText}</span>
-                          <span className="document-expand-toggle">
-                            {isExpanded ? '▲' : '▼'}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* Prompts de Análise */}
-        {analysisPrompts.length > 0 && (
-          <div className="documents-section" style={{ marginTop: '16px' }}>
-            <div className="documents-section-header">
-              <span className="documents-icon">🤖</span>
-              <h4>Análise por IA</h4>
-            </div>
-            {!contextReady ? (
-              <div className="prompts-loading-context">
-                <div className="prompt-loading-spinner"></div>
-                <span>Carregando contexto do lead...</span>
-              </div>
-            ) : (
-              <div className="analysis-prompts-grid" style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', padding: '8px 0' }}>
-                {analysisPrompts.map(prompt => (
-                  <button
-                    key={prompt.id}
-                    onClick={() => handleUseAnalysisPrompt(prompt)}
-                    disabled={generatingAnalysisPrompt !== null}
-                    className="prompt-button"
-                    title={prompt.description || prompt.content?.substring(0, 100)}
-                    style={{
-                      padding: '6px 14px',
-                      borderRadius: '16px',
-                      border: '1px solid #d1d5db',
-                      background: generatingAnalysisPrompt === prompt.id ? '#e0e7ff' : '#f9fafb',
-                      cursor: generatingAnalysisPrompt ? 'not-allowed' : 'pointer',
-                      fontSize: '13px',
-                      color: '#374151',
-                      opacity: generatingAnalysisPrompt && generatingAnalysisPrompt !== prompt.id ? 0.5 : 1,
-                    }}
-                  >
-                    {generatingAnalysisPrompt === prompt.id ? '⏳ Gerando...' : prompt.name}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {/* Resultado da análise gerada */}
-            {analysisResult && (
-              <div className="analysis-block" style={{ marginTop: '12px' }}>
-                <div className="analysis-label">Resultado da Análise</div>
-                <div className="analysis-content">
-                  <ReactMarkdown>{analysisResult}</ReactMarkdown>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Análise de Documentos do Monday */}
-        {documentAnalysis && (
-          <div className="document-analysis-section">
-            <div className="documents-section-header">
-              <span className="documents-icon">🔍</span>
-              <h4>Análise de Documentos</h4>
-            </div>
-            {documentAnalysis.checklist && (
-              <div className="analysis-block">
-                <div className="analysis-label">Checklist</div>
-                <div className="analysis-content">
-                  <ReactMarkdown>{documentAnalysis.checklist}</ReactMarkdown>
-                </div>
-              </div>
-            )}
-            {documentAnalysis.analise && (
-              <div className="analysis-block">
-                <div className="analysis-label">Análise</div>
-                <div className="analysis-content">
-                  <ReactMarkdown>{documentAnalysis.analise}</ReactMarkdown>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
       </div>
     );
   };
@@ -1918,6 +2053,75 @@ Instruções:
     );
   };
 
+  // Renderizar painel de debug IA (via portal)
+  const renderAiDebugPanel = () => {
+    if (!aiDebugData || activeTab !== 'whatsapp') return null;
+
+    return ReactDOM.createPortal(
+      <div className="ai-debug-portal">
+        {/* FAB Button */}
+        <button
+          className={`ai-debug-fab ${aiDebugPanelOpen ? 'open' : ''}`}
+          onClick={() => setAiDebugPanelOpen(!aiDebugPanelOpen)}
+          title={aiDebugPanelOpen ? 'Fechar painel de debug' : 'Ver dados enviados para IA'}
+        >
+          {aiDebugPanelOpen ? (
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+            </svg>
+          ) : (
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
+            </svg>
+          )}
+        </button>
+
+        {/* Expanded Panel */}
+        {aiDebugPanelOpen && (
+          <div className="ai-debug-panel">
+            <div className="ai-debug-panel-header">
+              <div>
+                <div className="ai-debug-panel-title">Dados enviados para IA</div>
+                <div className="ai-debug-panel-subtitle">
+                  Prompt: {aiDebugData.promptName} &bull; {aiDebugData.timestamp.toLocaleTimeString('pt-BR')}
+                </div>
+              </div>
+              <button className="ai-debug-panel-close" onClick={() => setAiDebugPanelOpen(false)}>×</button>
+            </div>
+
+            <div className="ai-debug-stats-bar">
+              <div className="ai-debug-stat">
+                <span className="ai-debug-stat-value">{aiDebugData.totalChars.toLocaleString()}</span>
+                <span className="ai-debug-stat-label">chars</span>
+              </div>
+              <div className="ai-debug-stat">
+                <span className="ai-debug-stat-value">~{aiDebugData.estimatedTokens.toLocaleString()}</span>
+                <span className="ai-debug-stat-label">tokens</span>
+              </div>
+              <div className="ai-debug-stat">
+                <span className="ai-debug-stat-value">{aiDebugData.budgetUsedPercent}%</span>
+                <span className="ai-debug-stat-label">budget</span>
+              </div>
+              <div className="ai-debug-stat">
+                <span className="ai-debug-stat-value">{aiDebugData.messageCount}</span>
+                <span className="ai-debug-stat-label">msgs</span>
+              </div>
+            </div>
+
+            <div className="ai-debug-panel-body">
+              <AiDebugSection title="System Prompt" content={aiDebugData.systemPrompt} charCount={aiDebugData.systemPromptChars} />
+              <AiDebugSection title="Histórico de Conversa" content={aiDebugData.conversationHistory} charCount={aiDebugData.conversationHistoryChars} />
+              <AiDebugSection title="Prompt do Usuário" content={aiDebugData.userPrompt} charCount={aiDebugData.userPromptChars} />
+              <AiDebugSection title="Contexto do Lead" content={aiDebugData.leadContext} charCount={aiDebugData.leadContextChars} />
+              <AiDebugSection title="Cadeia de Prompts" content={aiDebugData.fullPromptChain} charCount={aiDebugData.fullPromptChainChars} />
+            </div>
+          </div>
+        )}
+      </div>,
+      document.body
+    );
+  };
+
   return (
     <div className="lead-panel">
       {/* Header */}
@@ -2083,6 +2287,9 @@ Instruções:
         </div>,
         document.body
       )}
+
+      {/* Painel de Debug IA */}
+      {renderAiDebugPanel()}
 
       {/* Modal de Cadastro de Lead */}
       {showCreateLeadModal && ReactDOM.createPortal(

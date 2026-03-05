@@ -20,6 +20,11 @@ const ErrorReportWidget: React.FC = () => {
   const [hasNewResponse, setHasNewResponse] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
 
+  // Resetar mensagens quando o lead mudar
+  useEffect(() => {
+    setMessages([]);
+  }, [currentLead?.id]);
+
   useEffect(() => {
     if (endRef.current && isOpen) {
       endRef.current.scrollIntoView({ behavior: 'smooth' });
@@ -142,7 +147,7 @@ const ErrorReportWidget: React.FC = () => {
             <div className="error-report-input-area">
               {currentLead && (
                 <div className="error-report-lead-badge">
-                  Lead: <strong>{currentLead.name}</strong>
+                  Lead: <strong>{currentLead.name}</strong> <span style={{ opacity: 0.7, fontSize: '0.85em' }}>({currentLead.id})</span>
                 </div>
               )}
               <div className="error-report-input-row">

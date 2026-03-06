@@ -26,7 +26,7 @@ class AuthService {
     }
   }
 
-  async login(credentials: LoginCredentials): Promise<User | null> {
+  async login(credentials: LoginCredentials): Promise<User | { requires2FA: true; email: string } | null> {
     try {
       const response = await fetch(`${SERVER_BASE}/api/auth/login`, {
         method: 'POST',
@@ -41,6 +41,11 @@ class AuthService {
       }
 
       const data = await response.json();
+
+      if (data.requires2FA) {
+        return { requires2FA: true, email: data.email };
+      }
+
       const session: AuthSession = {
         token: data.token,
         user: data.user,
@@ -51,6 +56,35 @@ class AuthService {
       return session.user;
     } catch (error) {
       console.error('❌ Erro no login:', error);
+      return null;
+    }
+  }
+
+  async verify2FA(email: string, code: string): Promise<User | null> {
+    try {
+      const response = await fetch(`${SERVER_BASE}/api/auth/verify-2fa`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, code }),
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        console.warn('❌ Verificação 2FA falhou:', err.error || response.statusText);
+        return null;
+      }
+
+      const data = await response.json();
+      const session: AuthSession = {
+        token: data.token,
+        user: data.user,
+      };
+
+      localStorage.setItem('auth_session', JSON.stringify(session));
+      console.log('✅ 2FA verificado:', session.user.email);
+      return session.user;
+    } catch (error) {
+      console.error('❌ Erro na verificação 2FA:', error);
       return null;
     }
   }

@@ -94,6 +94,16 @@
   text-align: center;
 }
 
+.success-message {
+  background: #e6ffed;
+  color: #276749;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid #9ae6b4;
+  font-size: 14px;
+  text-align: center;
+}
+
 .login-button {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
@@ -141,6 +151,57 @@
   color: #888;
   font-size: 12px;
   margin: 2px 0;
+}
+
+/* 2FA OTP */
+.otp-info {
+  text-align: center;
+  color: #555;
+  font-size: 14px;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.otp-input {
+  text-align: center;
+  font-size: 28px !important;
+  letter-spacing: 12px;
+  font-weight: 600;
+  padding: 14px 16px !important;
+}
+
+.otp-resend {
+  background: none;
+  border: none;
+  color: #667eea;
+  font-size: 14px;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 8px;
+  text-align: center;
+}
+
+.otp-resend:hover:not(:disabled) {
+  color: #764ba2;
+}
+
+.otp-resend:disabled {
+  color: #aaa;
+  cursor: not-allowed;
+}
+
+.otp-back {
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 4px;
+  text-align: center;
+}
+
+.otp-back:hover:not(:disabled) {
+  color: #333;
 }
 
 /* Responsive */

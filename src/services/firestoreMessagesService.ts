@@ -20,6 +20,8 @@ export interface MessagesResponse {
   messages: FirestoreMessage[];
   count: number;
   channel_phone?: string | null;
+  umbler_org_id?: string | null;
+  umbler_chat_id?: string | null;
 }
 
 export const firestoreMessagesService = {

@@ -69,10 +69,12 @@ export interface LoginCredentials {
 
 export interface AuthContextType {
   user: User | null;
-  login: (credentials: LoginCredentials) => Promise<boolean>;
+  login: (credentials: LoginCredentials) => Promise<boolean | '2fa'>;
   logout: () => Promise<void>;
   isAuthenticated: boolean;
   hasPermission: (tab: TabPermission) => boolean;
+  pending2FA: { email: string } | null;
+  verify2FA: (code: string) => Promise<boolean>;
 }
 
 export interface ApiConfig {

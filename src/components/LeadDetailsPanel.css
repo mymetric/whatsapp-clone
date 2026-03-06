@@ -493,6 +493,71 @@
   flex-shrink: 0;
 }
 
+/* Aviso janela API 24h */
+.api-window-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #fff3cd;
+  color: #856404;
+  border-top: 1px solid #ffc107;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.api-window-warning svg {
+  flex-shrink: 0;
+  fill: #856404;
+}
+
+/* Seletor de canal */
+.channel-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: #eef1f5;
+  border-top: 1px solid #dde1e6;
+  font-size: 12px;
+  color: #555;
+}
+
+.channel-selector label {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.channel-selector select {
+  padding: 4px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 12px;
+  background: white;
+  cursor: pointer;
+}
+
+.channel-selector-warn {
+  color: #c53030;
+  font-weight: 600;
+  font-size: 11px;
+}
+
+/* Link Umbler */
+.umbler-chat-link {
+  margin-left: auto;
+  color: #667eea;
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.umbler-chat-link:hover {
+  text-decoration: underline;
+  color: #764ba2;
+}
+
 /* WhatsApp Input */
 .whatsapp-input-container {
   display: flex;

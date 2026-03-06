@@ -28,6 +28,10 @@ const admin = require('firebase-admin');
 const multer = require('multer');
 require('dotenv').config();
 
+// MailerSend para 2FA
+const { MailerSend, EmailParams, Sender, Recipient } = require('mailersend');
+const mailerSend = new MailerSend({ apiKey: process.env.MAILERSEND_API_KEY || '' });
+
 const uploadMulter = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
 // Inicializar Firebase Admin SDK
@@ -292,6 +296,10 @@ function parseUmblerWebhookToMessage(docId, data) {
   const channel = content.Channel || {};
   const channelPhone = (channel.PhoneNumber || '').replace(/\D/g, '') || null;
 
+  // Extrair IDs do Umbler para link direto
+  const umblerOrgId = (content.Organization || {}).Id || null;
+  const umblerChatId = content.Id || (content.Chat || lastMessage.Chat || {}).Id || null;
+
   const source = detectSourceFromWebhook(data);
 
   let displayContent = msgContent;
@@ -311,6 +319,8 @@ function parseUmblerWebhookToMessage(docId, data) {
     source,
     timestamp,
     channel_phone: channelPhone,
+    umbler_org_id: umblerOrgId,
+    umbler_chat_id: umblerChatId,
     _fromWebhook: true,
   };
 }
@@ -585,6 +595,10 @@ async function requireAuth(req, res, next) {
       permissions: session.permissions || DEFAULT_PERMISSIONS[session.role] || [],
     };
 
+    // Sliding session: renovar expiresAt a cada requisição autenticada
+    const newExpires = new Date(Date.now() + SESSION_TTL).toISOString();
+    firestoreDb.collection('sessions').doc(token).update({ expiresAt: newExpires }).catch(() => {});
+
     next();
   } catch (err) {
     console.error('❌ Erro na autenticação:', err.message);
@@ -642,32 +656,161 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Credenciais inválidas' });
     }
 
-    const token = crypto.randomBytes(32).toString('hex');
     const permissions = userData.permissions || DEFAULT_PERMISSIONS[userData.role] || [];
 
-    await firestoreDb.collection('sessions').doc(token).set({
-      email: userData.email,
+    // Gerar código 2FA de 6 dígitos
+    const code2fa = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString(); // 5 min
+
+    // Salvar pending 2FA no Firestore
+    await firestoreDb.collection('pending_2fa').doc(email).set({
+      code: code2fa,
       name: userData.name,
       role: userData.role,
       permissions,
+      expiresAt,
+    });
+
+    // Enviar email com código via MailerSend
+    const fromEmail = process.env.MAILERSEND_FROM_EMAIL || 'noreply@seudominio.com';
+    const emailParams = new EmailParams()
+      .setFrom(new Sender(fromEmail, process.env.MAILERSEND_FROM_NAME || 'Rosenbaum Advogados'))
+      .setTo([new Recipient(email, userData.name)])
+      .setSubject('Código de verificação - Rosenbaum Advogados')
+      .setHtml(`<h2>Seu código de verificação</h2><p style="font-size:32px;letter-spacing:8px;font-weight:bold">${code2fa}</p><p>Este código expira em 5 minutos.</p>`)
+      .setText(`Seu código de verificação: ${code2fa}. Este código expira em 5 minutos.`);
+
+    try {
+      await mailerSend.email.send(emailParams);
+      console.log(`✅ [auth] Código 2FA enviado para: ${email}`);
+    } catch (mailErr) {
+      console.error('❌ [auth] Erro ao enviar email 2FA:', mailErr.message);
+      return res.status(500).json({ error: 'Erro ao enviar código de verificação' });
+    }
+
+    return res.json({ requires2FA: true, email });
+  } catch (err) {
+    console.error('❌ [auth] Erro no login:', err.message);
+    return res.status(500).json({ error: 'Erro no login', details: err.message });
+  }
+});
+
+app.post('/api/auth/verify-2fa', async (req, res) => {
+  try {
+    if (!firestoreDb) {
+      return res.status(500).json({ error: 'Firebase não configurado' });
+    }
+
+    const { email, code } = req.body || {};
+    if (!email || !code) {
+      return res.status(400).json({ error: 'Email e código são obrigatórios' });
+    }
+
+    const pendingDoc = await firestoreDb.collection('pending_2fa').doc(email).get();
+    if (!pendingDoc.exists) {
+      return res.status(401).json({ error: 'Código inválido ou expirado' });
+    }
+
+    const pendingData = pendingDoc.data();
+
+    // Verificar expiração
+    if (new Date(pendingData.expiresAt) < new Date()) {
+      await firestoreDb.collection('pending_2fa').doc(email).delete();
+      return res.status(401).json({ error: 'Código expirado. Faça login novamente.' });
+    }
+
+    // Verificar código
+    if (pendingData.code !== code) {
+      return res.status(401).json({ error: 'Código inválido' });
+    }
+
+    // Código válido — deletar pending e criar sessão
+    await firestoreDb.collection('pending_2fa').doc(email).delete();
+
+    const token = crypto.randomBytes(32).toString('hex');
+    await firestoreDb.collection('sessions').doc(token).set({
+      email,
+      name: pendingData.name,
+      role: pendingData.role,
+      permissions: pendingData.permissions,
       createdAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + SESSION_TTL).toISOString(),
     });
 
-    console.log(`✅ [auth] Login: ${email}`);
+    console.log(`✅ [auth] 2FA verificado, login completo: ${email}`);
+
+    // Usage log: login (fire-and-forget)
+    firestoreDb.collection('usage_logs').add({
+      type: 'login',
+      email,
+      name: pendingData.name,
+      timestamp: new Date().toISOString(),
+    }).catch(() => {});
 
     return res.json({
       token,
       user: {
-        email: userData.email,
-        name: userData.name,
-        role: userData.role,
-        permissions,
+        email,
+        name: pendingData.name,
+        role: pendingData.role,
+        permissions: pendingData.permissions,
       },
     });
   } catch (err) {
-    console.error('❌ [auth] Erro no login:', err.message);
-    return res.status(500).json({ error: 'Erro no login', details: err.message });
+    console.error('❌ [auth] Erro no verify-2fa:', err.message);
+    return res.status(500).json({ error: 'Erro na verificação', details: err.message });
+  }
+});
+
+app.post('/api/auth/forgot-password', async (req, res) => {
+  try {
+    if (!firestoreDb) {
+      return res.status(500).json({ error: 'Firebase não configurado' });
+    }
+
+    const { email } = req.body || {};
+    if (!email) {
+      return res.status(400).json({ error: 'Email é obrigatório' });
+    }
+
+    const userDoc = await firestoreDb.collection('users').doc(email).get();
+    if (!userDoc.exists) {
+      // Não revelar se o email existe ou não
+      return res.json({ success: true });
+    }
+
+    const userData = userDoc.data();
+
+    // Gerar nova senha temporária
+    const newPassword = crypto.randomBytes(4).toString('hex').toUpperCase();
+
+    // Salvar nova senha no Firestore
+    await firestoreDb.collection('users').doc(email).update({ password: newPassword });
+
+    // Invalidar sessões ativas
+    const sessions = await firestoreDb.collection('sessions').where('email', '==', email).get();
+    if (!sessions.empty) {
+      const batch = firestoreDb.batch();
+      sessions.docs.forEach(doc => batch.delete(doc.ref));
+      await batch.commit();
+    }
+
+    // Enviar email com nova senha via MailerSend
+    const fromEmail = process.env.MAILERSEND_FROM_EMAIL || 'noreply@seudominio.com';
+    const emailParams = new EmailParams()
+      .setFrom(new Sender(fromEmail, process.env.MAILERSEND_FROM_NAME || 'Rosenbaum Advogados'))
+      .setTo([new Recipient(email, userData.name)])
+      .setSubject('Recuperação de senha - Rosenbaum Advogados')
+      .setHtml(`<h2>Recuperação de senha</h2><p>Olá ${userData.name},</p><p>Sua nova senha temporária é:</p><p style="font-size:24px;font-weight:bold;letter-spacing:4px;background:#f0f0f0;padding:12px;display:inline-block;border-radius:8px">${newPassword}</p><p>Recomendamos que solicite a troca da senha após o login.</p>`)
+      .setText(`Olá ${userData.name}, sua nova senha temporária é: ${newPassword}`);
+
+    await mailerSend.email.send(emailParams);
+    console.log(`✅ [auth] Senha resetada e enviada para: ${email}`);
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('❌ [auth] Erro no forgot-password:', err.message);
+    return res.status(500).json({ error: 'Erro ao recuperar senha' });
   }
 });
 
@@ -913,16 +1056,22 @@ app.get('/api/firestore/messages', requireAuth, requirePermission('conversas-lea
 
     console.log(`✅ [server] Encontradas ${messages.length} mensagens para ${normalizedPhone} (merged)`);
 
-    // Detectar channel_phone mais recente da conversa
+    // Detectar channel_phone e umbler IDs mais recentes da conversa
     let conversationChannelPhone = null;
+    let umblerOrgId = null;
+    let umblerChatId = null;
     for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].channel_phone) {
+      if (!conversationChannelPhone && messages[i].channel_phone) {
         conversationChannelPhone = messages[i].channel_phone;
-        break;
       }
+      if (!umblerChatId && messages[i].umbler_chat_id) {
+        umblerOrgId = messages[i].umbler_org_id;
+        umblerChatId = messages[i].umbler_chat_id;
+      }
+      if (conversationChannelPhone && umblerChatId) break;
     }
 
-    return res.json({ messages, count: messages.length, channel_phone: conversationChannelPhone });
+    return res.json({ messages, count: messages.length, channel_phone: conversationChannelPhone, umbler_org_id: umblerOrgId, umbler_chat_id: umblerChatId });
   } catch (err) {
     console.error('❌ [server] Erro ao buscar mensagens do Firestore:', err);
     return res.status(500).json({
@@ -993,6 +1142,16 @@ app.post('/api/send-message', requireAuth, requirePermission('conversas-leads'),
         upstreamStatus: upstream.status,
       });
     }
+
+    // Usage log: message sent (fire-and-forget)
+    firestoreDb.collection('usage_logs').add({
+      type: 'message_sent',
+      email: req.user.email,
+      name: req.user.name,
+      phone,
+      messageLength: message.length,
+      timestamp: new Date().toISOString(),
+    }).catch(() => {});
 
     return res.status(200).json({
       success: true,
@@ -1754,6 +1913,16 @@ app.post('/api/grok/chat', requireAuth, requirePermission('conversas-leads'), as
 
     const data = response.data;
     console.log(`✅ Resposta do Grok recebida com sucesso`);
+
+    // Usage log: AI suggestion (fire-and-forget)
+    firestoreDb.collection('usage_logs').add({
+      type: 'ai_suggestion',
+      email: req.user.email,
+      name: req.user.name,
+      model: model || 'grok-4-fast',
+      timestamp: new Date().toISOString(),
+    }).catch(() => {});
+
     return res.json(data);
   } catch (err) {
     console.error('❌ [server] Erro ao chamar Grok:', err.response?.status, err.message);
@@ -3975,6 +4144,116 @@ app.get('/api/error-reports', requireAuth, requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('❌ [ErrorReport] Erro ao listar reports:', err.message);
     return res.status(500).json({ error: 'Erro ao listar reports' });
+  }
+});
+
+app.patch('/api/error-reports/:id', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    if (!firestoreDb) {
+      return res.status(500).json({ error: 'Firebase nao configurado' });
+    }
+
+    const { id } = req.params;
+    const { status } = req.body || {};
+    if (!status) {
+      return res.status(400).json({ error: 'Status é obrigatório' });
+    }
+
+    const docRef = firestoreDb.collection('error_reports').doc(id);
+    const doc = await docRef.get();
+    if (!doc.exists) {
+      return res.status(404).json({ error: 'Report não encontrado' });
+    }
+
+    await docRef.update({ status, updatedAt: new Date().toISOString() });
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('❌ [ErrorReport] Erro ao atualizar report:', err.message);
+    return res.status(500).json({ error: 'Erro ao atualizar report' });
+  }
+});
+
+app.delete('/api/error-reports/:id', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    if (!firestoreDb) {
+      return res.status(500).json({ error: 'Firebase nao configurado' });
+    }
+
+    const { id } = req.params;
+    const docRef = firestoreDb.collection('error_reports').doc(id);
+    const doc = await docRef.get();
+    if (!doc.exists) {
+      return res.status(404).json({ error: 'Report não encontrado' });
+    }
+
+    await docRef.delete();
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('❌ [ErrorReport] Erro ao deletar report:', err.message);
+    return res.status(500).json({ error: 'Erro ao deletar report' });
+  }
+});
+
+// =====================================================
+// USAGE LOGS — Endpoint para consultar logs de uso
+// =====================================================
+
+app.get('/api/usage-logs', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    if (!firestoreDb) {
+      return res.status(500).json({ error: 'Firebase nao configurado' });
+    }
+
+    const { email, startDate, endDate } = req.query;
+
+    let query = firestoreDb.collection('usage_logs').orderBy('timestamp', 'desc');
+
+    if (email) {
+      query = firestoreDb.collection('usage_logs')
+        .where('email', '==', email)
+        .orderBy('timestamp', 'desc');
+    }
+
+    if (startDate) {
+      query = query.where('timestamp', '>=', startDate);
+    }
+    if (endDate) {
+      query = query.where('timestamp', '<=', endDate);
+    }
+
+    query = query.limit(2000);
+
+    const snapshot = await query.get();
+    const logs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+    // Aggregate stats per user
+    const statsMap = {};
+    for (const log of logs) {
+      const key = log.email;
+      if (!statsMap[key]) {
+        statsMap[key] = {
+          email: log.email,
+          name: log.name,
+          logins: 0,
+          aiSuggestions: 0,
+          messagesSent: 0,
+          lastActivity: log.timestamp,
+        };
+      }
+      if (log.type === 'login') statsMap[key].logins++;
+      else if (log.type === 'ai_suggestion') statsMap[key].aiSuggestions++;
+      else if (log.type === 'message_sent') statsMap[key].messagesSent++;
+
+      if (log.timestamp > statsMap[key].lastActivity) {
+        statsMap[key].lastActivity = log.timestamp;
+      }
+    }
+
+    const stats = Object.values(statsMap);
+    return res.json({ logs, stats });
+  } catch (err) {
+    console.error('❌ [UsageLogs] Erro ao consultar logs:', err.message);
+    return res.status(500).json({ error: 'Erro ao consultar logs de uso', details: err.message });
   }
 });
 

@@ -95,6 +95,8 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
   const [showMessageInput, setShowMessageInput] = useState(false);
   const [sendingMessage, setSendingMessage] = useState(false);
   const [conversationChannelPhone, setConversationChannelPhone] = useState<string | null>(null);
+  const [apiWindowExpired, setApiWindowExpired] = useState(false);
+  const [umblerChatUrl, setUmblerChatUrl] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const allPromptsMapRef = useRef<Map<string, Prompt>>(new Map());
@@ -400,6 +402,29 @@ const LeadDetailsPanel: React.FC<LeadDetailsPanelProps> = ({ item, columns, boar
       });
       setWhatsappMessages(sortedMessages);
       setConversationChannelPhone(result.channel_phone || null);
+
+      // Construir link para conversa no Umbler
+      if (result.umbler_chat_id) {
+        setUmblerChatUrl(`https://app-utalk.umbler.com/chats/${result.umbler_chat_id}`);
+      } else {
+        setUmblerChatUrl(null);
+      }
+
+      // Verificar janela de 24h para número API (551131815581)
+      const channelPhone = result.channel_phone || '';
+      if (channelPhone === '551131815581') {
+        const lastContactMsg = [...sortedMessages].reverse().find(m => m.source === 'Contact');
+        if (lastContactMsg?.timestamp) {
+          const lastContactTime = new Date(lastContactMsg.timestamp).getTime();
+          const hoursAgo = (Date.now() - lastContactTime) / (1000 * 60 * 60);
+          setApiWindowExpired(hoursAgo > 24);
+        } else {
+          setApiWindowExpired(true);
+        }
+      } else {
+        setApiWindowExpired(false);
+      }
+
       setWhatsappLoaded(true);
       if (result.messages.length === 0) {
         setWhatsappError('Nenhuma mensagem encontrada para este telefone');
@@ -1823,6 +1848,38 @@ Instruções:
           </div>
         )}
 
+        {/* Aviso de janela API 24h expirada */}
+        {apiWindowExpired && conversationChannelPhone === '551131815581' && (
+          <div className="api-window-warning">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/>
+            </svg>
+            <span>Janela de 24h expirada no numero API (5581). Troque para o Aparelho (4449) abaixo para enviar.</span>
+          </div>
+        )}
+
+        {/* Seletor de canal de envio + link Umbler */}
+        {showMessageInput && (
+          <div className="channel-selector">
+            <label>Enviar por:</label>
+            <select
+              value={conversationChannelPhone || ''}
+              onChange={(e) => setConversationChannelPhone(e.target.value || null)}
+            >
+              <option value="5511988094449">Aparelho (4449)</option>
+              <option value="551131815581">API (5581)</option>
+            </select>
+            {conversationChannelPhone === '551131815581' && apiWindowExpired && (
+              <span className="channel-selector-warn">24h expirada</span>
+            )}
+            {umblerChatUrl && (
+              <a href={umblerChatUrl} target="_blank" rel="noopener noreferrer" className="umbler-chat-link" title="Abrir conversa no Umbler">
+                Abrir no Umbler ↗
+              </a>
+            )}
+          </div>
+        )}
+
         {/* Input de envio de mensagem */}
         {showMessageInput ? (
           <div className="whatsapp-input-container">
@@ -1872,6 +1929,11 @@ Instruções:
               </svg>
               <span>Escrever mensagem</span>
             </button>
+            {umblerChatUrl && (
+              <a href={umblerChatUrl} target="_blank" rel="noopener noreferrer" className="umbler-chat-link" title="Abrir conversa no Umbler">
+                Abrir no Umbler ↗
+              </a>
+            )}
           </div>
         )}
       </div>

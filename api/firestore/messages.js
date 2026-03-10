@@ -108,6 +108,8 @@ module.exports = async (req, res) => {
             name: data.name || '',
             source: data.source || '',
             timestamp: data.timestamp?.toDate?.() || data.timestamp || null,
+            umbler_chat_id: data.umbler_chat_id || null,
+            umbler_org_id: data.umbler_org_id || null,
           });
         });
         break; // Encontrou mensagens, parar de buscar variantes
@@ -139,6 +141,8 @@ module.exports = async (req, res) => {
             name: data.name || '',
             source: data.source || '',
             timestamp: data.timestamp?.toDate?.() || data.timestamp || null,
+            umbler_chat_id: data.umbler_chat_id || null,
+            umbler_org_id: data.umbler_org_id || null,
           });
         }
       });
@@ -169,7 +173,18 @@ module.exports = async (req, res) => {
       console.warn('⚠️ [server] Erro ao buscar channel_phone de webhooks:', whErr.message);
     }
 
-    return res.json({ messages: allMessages, count: allMessages.length, channel_phone: conversationChannelPhone });
+    // Extrair umbler_chat_id das mensagens (igual server.js)
+    let umblerChatId = null;
+    let umblerOrgId = null;
+    for (let i = allMessages.length - 1; i >= 0; i--) {
+      if (allMessages[i].umbler_chat_id) {
+        umblerChatId = allMessages[i].umbler_chat_id;
+        umblerOrgId = allMessages[i].umbler_org_id;
+        break;
+      }
+    }
+
+    return res.json({ messages: allMessages, count: allMessages.length, channel_phone: conversationChannelPhone, umbler_chat_id: umblerChatId, umbler_org_id: umblerOrgId });
   } catch (err) {
     console.error('❌ [server] Erro ao buscar mensagens do Firestore:', err);
     return res.status(500).json({

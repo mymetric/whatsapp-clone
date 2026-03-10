@@ -619,10 +619,20 @@ Use esse contexto para responder perguntas sobre o processo, andamentos e riscos
       const grokToken = authService.getToken();
       if (grokToken) grokHeaders['Authorization'] = `Bearer ${grokToken}`;
 
+      // Add user info for activity logging
+      let _user = { email: 'unknown', name: 'unknown' };
+      try {
+        const sessionStr = localStorage.getItem('auth_session');
+        if (sessionStr) {
+          const session = JSON.parse(sessionStr);
+          _user = { email: session.user?.email || 'unknown', name: session.user?.name || 'unknown' };
+        }
+      } catch { /* ignore */ }
+
       const response = await fetch('/api/grok/contencioso', {
         method: 'POST',
         headers: grokHeaders,
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, _user }),
       });
 
       if (!response.ok) {

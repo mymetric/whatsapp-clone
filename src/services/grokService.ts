@@ -31,6 +31,17 @@ class GrokService {
     return headers;
   }
 
+  private getUserInfo(): { email: string; name: string } {
+    try {
+      const sessionStr = localStorage.getItem('auth_session');
+      if (sessionStr) {
+        const session = JSON.parse(sessionStr);
+        return { email: session.user?.email || 'unknown', name: session.user?.name || 'unknown' };
+      }
+    } catch { /* ignore */ }
+    return { email: 'unknown', name: 'unknown' };
+  }
+
   async generateResponse(
     userPrompt: string, 
     context?: {
@@ -123,6 +134,7 @@ Instruções:
           messages: messages,
           max_tokens: context?.systemPrompt ? 40000 : 1000,
           temperature: 0.7,
+          _user: this.getUserInfo(),
         })
       });
 
@@ -231,6 +243,7 @@ Instruções:
           messages,
           max_tokens: 40000,
           temperature: 0.7,
+          _user: this.getUserInfo(),
         }),
       });
 

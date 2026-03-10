@@ -21,6 +21,21 @@ interface UserRow {
   saving?: boolean;
 }
 
+interface ActivityLog {
+  id: string;
+  action: string;
+  userEmail: string;
+  userName: string;
+  metadata: Record<string, any>;
+  timestamp: string;
+}
+
+interface ActivitySummary {
+  total: number;
+  byAction: Record<string, number>;
+  byUser: Record<string, number>;
+}
+
 interface ErrorReportRow {
   id: string;
   description: string;
@@ -34,7 +49,7 @@ interface ErrorReportRow {
   createdAt: string;
 }
 
-type AdminTab = 'users' | 'error-reports';
+type AdminTab = 'users' | 'error-reports' | 'usage';
 
 const AdminPanel: React.FC = () => {
   const [activeTab, setActiveTab] = useState<AdminTab>('users');
@@ -53,6 +68,16 @@ const AdminPanel: React.FC = () => {
   const [errorReports, setErrorReports] = useState<ErrorReportRow[]>([]);
   const [loadingReports, setLoadingReports] = useState(false);
   const [reportsLoaded, setReportsLoaded] = useState(false);
+
+  // Activity logs
+  const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
+  const [activitySummary, setActivitySummary] = useState<ActivitySummary | null>(null);
+  const [loadingActivity, setLoadingActivity] = useState(false);
+  const [activityLoaded, setActivityLoaded] = useState(false);
+  const [activityFilterAction, setActivityFilterAction] = useState('');
+  const [activityFilterEmail, setActivityFilterEmail] = useState('');
+  const [activityStartDate, setActivityStartDate] = useState('');
+  const [activityEndDate, setActivityEndDate] = useState('');
 
   const showMessage = (type: 'success' | 'error', text: string) => {
     setMessage({ type, text });
@@ -97,6 +122,35 @@ const AdminPanel: React.FC = () => {
       loadErrorReports();
     }
   }, [activeTab, reportsLoaded, loadErrorReports]);
+
+  const loadActivityLogs = useCallback(async (action?: string, email?: string, startDate?: string, endDate?: string) => {
+    try {
+      setLoadingActivity(true);
+      const params = new URLSearchParams();
+      if (action) params.set('action', action);
+      if (email) params.set('userEmail', email);
+      if (startDate) params.set('startDate', `${startDate}T00:00:00.000Z`);
+      if (endDate) params.set('endDate', `${endDate}T23:59:59.999Z`);
+      params.set('limit', '500');
+      const qs = params.toString();
+      const res = await apiFetch(`/api/activity-logs?${qs}`);
+      if (!res.ok) throw new Error('Erro ao carregar logs de atividade');
+      const data = await res.json();
+      setActivityLogs(data.logs || []);
+      setActivitySummary(data.summary || null);
+      setActivityLoaded(true);
+    } catch (err: any) {
+      showMessage('error', err.message || 'Erro ao carregar logs de atividade');
+    } finally {
+      setLoadingActivity(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'usage' && !activityLoaded) {
+      loadActivityLogs();
+    }
+  }, [activeTab, activityLoaded, loadActivityLogs]);
 
   const togglePermission = (email: string, perm: TabPermission) => {
     setUsers(prev =>
@@ -289,6 +343,12 @@ const AdminPanel: React.FC = () => {
         >
           Erros Reportados {reportsLoaded && openReports.length > 0 ? `(${openReports.length})` : ''}
         </button>
+        <button
+          className={`admin-tab-btn ${activeTab === 'usage' ? 'active' : ''}`}
+          onClick={() => setActiveTab('usage')}
+        >
+          Uso
+        </button>
       </div>
 
       <div className="admin-body">
@@ -473,7 +533,7 @@ const AdminPanel: React.FC = () => {
                         <div className="admin-report-description">{report.description}</div>
                         <div className="admin-report-meta">
                           <span>Por: <strong>{report.reportedByName || report.reportedBy}</strong></span>
-                          {report.leadName && <span>Lead: <strong>{report.leadName}</strong></span>}
+                          {report.leadName && <span>Lead: <strong>{report.leadName}</strong>{report.leadId ? ` (${report.leadId})` : ''}</span>}
                           {report.url && <span className="admin-report-url">{report.url}</span>}
                         </div>
                         <div className="admin-report-actions">
@@ -500,7 +560,7 @@ const AdminPanel: React.FC = () => {
                         <div className="admin-report-description">{report.description}</div>
                         <div className="admin-report-meta">
                           <span>Por: <strong>{report.reportedByName || report.reportedBy}</strong></span>
-                          {report.leadName && <span>Lead: <strong>{report.leadName}</strong></span>}
+                          {report.leadName && <span>Lead: <strong>{report.leadName}</strong>{report.leadId ? ` (${report.leadId})` : ''}</span>}
                         </div>
                         <div className="admin-report-actions">
                           <button className="admin-btn admin-btn-secondary" onClick={() => reopenReport(report.id)}>
@@ -515,6 +575,149 @@ const AdminPanel: React.FC = () => {
                   </>
                 )}
               </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'usage' && (
+          <div className="admin-section">
+            <div className="admin-section-header">
+              <h2>Logs de Atividade</h2>
+              <button
+                className="admin-btn admin-btn-secondary"
+                onClick={() => { setActivityLoaded(false); loadActivityLogs(activityFilterAction, activityFilterEmail, activityStartDate, activityEndDate); }}
+                disabled={loadingActivity}
+              >
+                Atualizar
+              </button>
+            </div>
+
+            {/* Summary cards */}
+            {activitySummary && (
+              <div className="admin-activity-summary">
+                <div className="admin-summary-card">
+                  <span className="admin-summary-number">{activitySummary.total}</span>
+                  <span className="admin-summary-label">Total</span>
+                </div>
+                {Object.entries(activitySummary.byAction).map(([action, count]) => (
+                  <div key={action} className={`admin-summary-card admin-summary-${action}`}>
+                    <span className="admin-summary-number">{count}</span>
+                    <span className="admin-summary-label">
+                      {action === 'message_sent' ? 'Mensagens' : action === 'ai_suggestion' ? 'Sugestoes IA' : action === 'ai_contencioso' ? 'IA Contencioso' : action === 'login' ? 'Logins' : action}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Filters */}
+            <div className="admin-usage-filters">
+              <div className="admin-form-group">
+                <label>Acao</label>
+                <select
+                  value={activityFilterAction}
+                  onChange={e => setActivityFilterAction(e.target.value)}
+                >
+                  <option value="">Todas</option>
+                  <option value="message_sent">Mensagens Enviadas</option>
+                  <option value="ai_suggestion">Sugestoes IA</option>
+                  <option value="ai_contencioso">IA Contencioso</option>
+                  <option value="login">Login</option>
+                </select>
+              </div>
+              <div className="admin-form-group">
+                <label>Usuario</label>
+                <select
+                  value={activityFilterEmail}
+                  onChange={e => setActivityFilterEmail(e.target.value)}
+                >
+                  <option value="">Todos</option>
+                  {users.map(u => (
+                    <option key={u.email} value={u.email}>{u.name} ({u.email})</option>
+                  ))}
+                </select>
+              </div>
+              <div className="admin-form-group">
+                <label>Data inicio</label>
+                <input
+                  type="date"
+                  value={activityStartDate}
+                  onChange={e => setActivityStartDate(e.target.value)}
+                />
+              </div>
+              <div className="admin-form-group">
+                <label>Data fim</label>
+                <input
+                  type="date"
+                  value={activityEndDate}
+                  onChange={e => setActivityEndDate(e.target.value)}
+                />
+              </div>
+              <button
+                className="admin-btn admin-btn-primary"
+                onClick={() => { setActivityLoaded(false); loadActivityLogs(activityFilterAction, activityFilterEmail, activityStartDate, activityEndDate); }}
+                disabled={loadingActivity}
+              >
+                Filtrar
+              </button>
+              {(activityFilterAction || activityFilterEmail || activityStartDate || activityEndDate) && (
+                <button
+                  className="admin-btn admin-btn-danger"
+                  onClick={() => { setActivityFilterAction(''); setActivityFilterEmail(''); setActivityStartDate(''); setActivityEndDate(''); setActivityLoaded(false); loadActivityLogs(); }}
+                >
+                  Limpar
+                </button>
+              )}
+            </div>
+
+            {loadingActivity ? (
+              <div className="admin-loading">
+                <div className="admin-spinner" />
+                <span>Carregando logs de atividade...</span>
+              </div>
+            ) : activityLogs.length === 0 ? (
+              <div className="admin-empty-state">
+                Nenhum log de atividade encontrado.
+              </div>
+            ) : (
+              <table className="admin-table">
+                <thead>
+                  <tr>
+                    <th>Data/Hora</th>
+                    <th>Usuario</th>
+                    <th>Acao</th>
+                    <th>Detalhes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {activityLogs.map(log => (
+                    <tr key={log.id}>
+                      <td style={{ whiteSpace: 'nowrap', fontSize: '12px', color: '#64748b' }}>{formatDate(log.timestamp)}</td>
+                      <td>
+                        <div style={{ fontWeight: 600, fontSize: '13px' }}>{log.userName}</div>
+                        <div style={{ fontSize: '11px', color: '#94a3b8' }}>{log.userEmail}</div>
+                      </td>
+                      <td>
+                        <span className={`admin-activity-badge admin-activity-${log.action}`}>
+                          {log.action === 'message_sent' ? 'Msg Enviada' : log.action === 'ai_suggestion' ? 'Sugestao IA' : log.action === 'ai_contencioso' ? 'IA Contencioso' : log.action === 'login' ? 'Login' : log.action}
+                        </span>
+                      </td>
+                      <td style={{ fontSize: '12px', color: '#64748b', maxWidth: '350px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {log.action === 'message_sent' && (
+                          <>Tel: {log.metadata.phone} ({log.metadata.messageLength} chars)</>
+                        )}
+                        {log.action === 'ai_suggestion' && (
+                          <>{log.metadata.model} | {log.metadata.messagesCount} msgs | Resp: {log.metadata.responseLength} chars</>
+                        )}
+                        {log.action === 'ai_contencioso' && (
+                          <>Proc: {log.metadata.numeroProcesso} | {log.metadata.filesCount} arq | {log.metadata.question}</>
+                        )}
+                        {log.action === 'login' && 'Login realizado'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             )}
           </div>
         )}

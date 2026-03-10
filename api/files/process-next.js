@@ -529,7 +529,7 @@ async function processNextItem() {
   const candidates = snapshot.docs
     .map(doc => ({ id: doc.id, ...doc.data() }))
     .filter(item => !item.nextRetryAt || item.nextRetryAt <= now)
-    .sort((a, b) => (b.receivedAt || b.createdAt || '').localeCompare(a.receivedAt || a.createdAt || ''));
+    .sort((a, b) => (a.receivedAt || a.createdAt || '').localeCompare(b.receivedAt || b.createdAt || ''));
 
   // Tentar claim via transação — se outro processo já pegou, tenta o próximo
   let claimedId = null;

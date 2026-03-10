@@ -75,7 +75,7 @@ module.exports = async (req, res) => {
     });
   }
 
-  const MAX_ITEMS = 5;
+  const MAX_ITEMS = 10;
   const results = [];
 
   for (let i = 0; i < MAX_ITEMS; i++) {

@@ -27,12 +27,22 @@ class MessageService {
       console.log('🔗 URL da API:', apiUrl);
       console.log('🌍 Modo:', process.env.NODE_ENV);
 
+      // Include auth token for activity logging
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'User-Agent': 'Rosenbaum-Chat-System/1.0'
+      };
+      try {
+        const sessionStr = localStorage.getItem('auth_session');
+        if (sessionStr) {
+          const session = JSON.parse(sessionStr);
+          if (session.token) headers['Authorization'] = `Bearer ${session.token}`;
+        }
+      } catch { /* ignore */ }
+
       const response = await fetch(apiUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': 'Rosenbaum-Chat-System/1.0'
-        },
+        headers,
         body: JSON.stringify(requestData)
       });
 

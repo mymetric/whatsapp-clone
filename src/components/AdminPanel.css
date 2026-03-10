@@ -3,8 +3,12 @@
   display: flex;
   flex-direction: column;
   height: 100%;
+  width: 100%;
   background: #f8fafc;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  margin: -20px;
+  padding: 0;
+  width: calc(100% + 40px);
 }
 
 /* Header */
@@ -91,7 +95,7 @@
 .admin-body {
   flex: 1;
   overflow-y: auto;
-  padding: 24px;
+  padding: 20px;
 }
 
 /* Section */
@@ -123,6 +127,11 @@
 .admin-table {
   width: 100%;
   border-collapse: collapse;
+  table-layout: auto;
+}
+
+.admin-table-wrapper {
+  overflow-x: auto;
 }
 
 .admin-table th,

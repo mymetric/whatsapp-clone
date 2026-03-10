@@ -702,7 +702,7 @@ const AdminPanel: React.FC = () => {
                           {log.action === 'message_sent' ? 'Msg Enviada' : log.action === 'ai_suggestion' ? 'Sugestao IA' : log.action === 'ai_contencioso' ? 'IA Contencioso' : log.action === 'login' ? 'Login' : log.action}
                         </span>
                       </td>
-                      <td style={{ fontSize: '12px', color: '#64748b', maxWidth: '350px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <td style={{ fontSize: '12px', color: '#64748b' }}>
                         {log.action === 'message_sent' && (
                           <>Tel: {log.metadata.phone} ({log.metadata.messageLength} chars)</>
                         )}

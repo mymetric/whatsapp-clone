@@ -152,8 +152,10 @@ module.exports = async (req, res) => {
 
     console.log(`✅ [server] Encontradas ${allMessages.length} mensagens para ${normalizedPhone}`);
 
-    // Buscar channel_phone do webhook mais recente para este contato
+    // Buscar channel_phone e umbler_chat_id do webhook mais recente para este contato
     let conversationChannelPhone = null;
+    let umblerChatId = null;
+    let umblerOrgId = null;
     try {
       const webhooksRef = firestoreDb.collection('umbler_webhooks');
       for (const variant of variants) {
@@ -164,24 +166,18 @@ module.exports = async (req, res) => {
           .get();
         if (!whSnap.empty) {
           const whData = whSnap.docs[0].data();
-          const chPhone = ((whData.Payload?.Content?.Channel?.PhoneNumber) || '').replace(/\D/g, '');
+          const content = whData.Payload?.Content || {};
+          const chPhone = (content.Channel?.PhoneNumber || '').replace(/\D/g, '');
           if (chPhone) conversationChannelPhone = chPhone;
+
+          // Extrair IDs do Umbler para link direto (igual server.js)
+          umblerOrgId = content.Organization?.Id || null;
+          umblerChatId = content.Id || content.Chat?.Id || null;
           break;
         }
       }
     } catch (whErr) {
-      console.warn('⚠️ [server] Erro ao buscar channel_phone de webhooks:', whErr.message);
-    }
-
-    // Extrair umbler_chat_id das mensagens (igual server.js)
-    let umblerChatId = null;
-    let umblerOrgId = null;
-    for (let i = allMessages.length - 1; i >= 0; i--) {
-      if (allMessages[i].umbler_chat_id) {
-        umblerChatId = allMessages[i].umbler_chat_id;
-        umblerOrgId = allMessages[i].umbler_org_id;
-        break;
-      }
+      console.warn('⚠️ [server] Erro ao buscar channel_phone/umbler de webhooks:', whErr.message);
     }
 
     return res.json({ messages: allMessages, count: allMessages.length, channel_phone: conversationChannelPhone, umbler_chat_id: umblerChatId, umbler_org_id: umblerOrgId });

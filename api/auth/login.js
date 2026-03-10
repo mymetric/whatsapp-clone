@@ -98,6 +98,19 @@ module.exports = async (req, res) => {
 
     console.log(`✅ [auth] Login: ${email}`);
 
+    // Log activity (inline — don't require activity-log here to avoid circular init)
+    try {
+      await firestoreDb.collection('activity_logs').add({
+        action: 'login',
+        userEmail: email,
+        userName: userData.name || email,
+        metadata: {},
+        timestamp: new Date().toISOString(),
+      });
+    } catch (logErr) {
+      console.warn('⚠️ [activity-log] Erro ao salvar log de login:', logErr.message);
+    }
+
     return res.json({
       token,
       user: {

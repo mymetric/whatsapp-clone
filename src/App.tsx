@@ -7,6 +7,7 @@ import ContenciosoTab from './components/ContenciosoTab';
 import ConversasLeadsTab from './components/ConversasLeadsTab';
 import FileProcessingTab from './components/FileProcessingTab';
 import AdminPanel from './components/AdminPanel';
+import ActivityLogsTab from './components/ActivityLogsTab';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { CurrentLeadProvider } from './contexts/CurrentLeadContext';
 import ErrorReportWidget from './components/ErrorReportWidget';
@@ -16,6 +17,7 @@ const AppContent: React.FC = () => {
   const [showContenciosoPage, setShowContenciosoPage] = useState(false);
   const [showFileProcessingPage, setShowFileProcessingPage] = useState(false);
   const [showAdminPage, setShowAdminPage] = useState(false);
+  const [showActivityLogsPage, setShowActivityLogsPage] = useState(false);
   const { isAuthenticated, hasPermission, user } = useAuth();
 
   const userPermissions = user?.permissions ?? [];
@@ -25,6 +27,7 @@ const AppContent: React.FC = () => {
     setShowContenciosoPage(false);
     setShowFileProcessingPage(false);
     setShowAdminPage(false);
+    setShowActivityLogsPage(false);
   };
 
   const handleAdminClick = () => {
@@ -54,6 +57,11 @@ const AppContent: React.FC = () => {
       setShowFileProcessingPage(true);
     },
     onAdminClick: handleAdminClick,
+    onActivityLogsClick: () => {
+      if (!hasPermission('admin')) return;
+      resetAllPages();
+      setShowActivityLogsPage(true);
+    },
     userPermissions,
   };
 
@@ -61,10 +69,13 @@ const AppContent: React.FC = () => {
     return <Login />;
   }
 
-  let activeTab: 'conversas-leads' | 'file-processing' | 'contencioso' | 'prompts' | 'admin' = 'conversas-leads';
+  let activeTab: 'conversas-leads' | 'file-processing' | 'contencioso' | 'prompts' | 'admin' | 'activity-logs' = 'conversas-leads';
   let pageContent: React.ReactNode = <ConversasLeadsTab />;
 
-  if (showAdminPage) {
+  if (showActivityLogsPage) {
+    activeTab = 'activity-logs';
+    pageContent = <ActivityLogsTab />;
+  } else if (showAdminPage) {
     activeTab = 'admin';
     pageContent = <AdminPanel />;
   } else if (showFileProcessingPage) {

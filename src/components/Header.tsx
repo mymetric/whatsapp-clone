@@ -4,12 +4,13 @@ import { TabPermission } from '../types';
 import './Header.css';
 
 interface HeaderProps {
-  activeTab?: 'contencioso' | 'prompts' | 'conversas-leads' | 'file-processing' | 'admin';
+  activeTab?: 'contencioso' | 'prompts' | 'conversas-leads' | 'file-processing' | 'admin' | 'activity-logs';
   onPromptsClick?: () => void;
   onContenciosoClick?: () => void;
   onConversasLeadsClick?: () => void;
   onFileProcessingClick?: () => void;
   onAdminClick?: () => void;
+  onActivityLogsClick?: () => void;
   userPermissions?: TabPermission[];
 }
 
@@ -20,6 +21,7 @@ const Header: React.FC<HeaderProps> = ({
   onConversasLeadsClick,
   onFileProcessingClick,
   onAdminClick,
+  onActivityLogsClick,
   userPermissions,
 }) => {
   const { user, logout, hasPermission } = useAuth();
@@ -96,6 +98,18 @@ const Header: React.FC<HeaderProps> = ({
                 <path d="M3 5h18v2H3V5zm4 6h14v2H7v-2zm-4 6h18v2H3v-2z" />
               </svg>
               <span>Prompts</span>
+            </button>
+          )}
+          {canSee('admin') && (
+            <button
+              onClick={onActivityLogsClick}
+              className={`header-prompts-button ${activeTab === 'activity-logs' ? 'active' : ''}`}
+              title="Logs de Atividade"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM7 10h2v7H7zm4-3h2v10h-2zm4 6h2v4h-2z"/>
+              </svg>
+              <span>Logs</span>
             </button>
           )}
           {canSee('admin') && (

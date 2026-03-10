@@ -1,4 +1,5 @@
 const { loadGrokApiKey, axios } = require('../../lib/utils');
+const { logActivity, getUserFromRequest } = require('../../lib/activity-log');
 
 module.exports = async (req, res) => {
   // CORS headers
@@ -55,10 +56,24 @@ module.exports = async (req, res) => {
     );
 
     const data = response.data;
-    
+
     // Log success
     console.log(`✅ Resposta do Grok recebida com sucesso`);
-    
+
+    // Log activity
+    const user = await getUserFromRequest(req);
+    const responseLength = data?.choices?.[0]?.message?.content?.length || 0;
+    logActivity({
+      action: 'ai_suggestion',
+      userEmail: user.email,
+      userName: user.name,
+      metadata: {
+        model: model || 'grok-4-fast',
+        messagesCount: messages.length,
+        responseLength,
+      },
+    });
+
     return res.json(data);
   } catch (err) {
     console.error('❌ [server] Erro ao chamar Grok:', err.response?.status, err.message);

@@ -1,4 +1,5 @@
 const { loadGrokApiKey, extractTextFromFile, getPdfParseStatus, axios } = require('../../lib/utils');
+const { logActivity, getUserFromRequest } = require('../../lib/activity-log');
 
 module.exports = async (req, res) => {
   // CORS headers
@@ -212,7 +213,23 @@ de forma clara, objetiva e com foco prático para advogados.`;
     console.log(`   Texto extraído incluído na mensagem: ${messageContainsExtractedText ? '✅ SIM' : '❌ NÃO'}`);
     console.log(`   Total de textos extraídos: ${extractedTexts.length}`);
     console.log(`   Tamanho da mensagem enviada: ${userMessageText.length} caracteres`);
-    
+
+    // Log activity
+    const user = await getUserFromRequest(req);
+    logActivity({
+      action: 'ai_contencioso',
+      userEmail: user.email,
+      userName: user.name,
+      metadata: {
+        numeroProcesso: processo,
+        itemName: item,
+        question: question?.substring(0, 100),
+        filesCount: downloadedFiles.length,
+        extractedTextsCount: extractedTexts.length,
+        responseLength: answer.length,
+      },
+    });
+
     return res.json({ 
       answer: answer.trim(),
       payload: {

@@ -1,4 +1,5 @@
 const { axios } = require('../lib/utils');
+const { logActivity, getUserFromRequest } = require('../lib/activity-log');
 
 module.exports = async (req, res) => {
   // CORS headers (seguro para consumo via browser; same-origin no Vercel)
@@ -73,6 +74,15 @@ module.exports = async (req, res) => {
         upstreamStatus: upstream.status,
       });
     }
+
+    // Log activity
+    const user = await getUserFromRequest(req);
+    logActivity({
+      action: 'message_sent',
+      userEmail: user.email,
+      userName: user.name,
+      metadata: { phone, messageLength: message.length, channel_phone: channel_phone || null },
+    });
 
     return res.status(200).json({
       success: true,

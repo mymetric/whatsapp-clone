@@ -543,9 +543,17 @@
   font-size: 11px;
 }
 
+/* Banner Umbler no topo da conversa */
+.umbler-chat-banner {
+  display: flex;
+  justify-content: center;
+  padding: 6px 12px;
+  background: #f0f2ff;
+  border-bottom: 1px solid #dde1f5;
+}
+
 /* Link Umbler */
 .umbler-chat-link {
-  margin-left: auto;
   color: #667eea;
   font-size: 12px;
   font-weight: 500;

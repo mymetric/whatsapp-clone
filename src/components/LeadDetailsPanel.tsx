@@ -1777,6 +1777,13 @@ Instruções:
 
     return (
       <div className="tab-content whatsapp-tab">
+        {umblerChatUrl && (
+          <div className="umbler-chat-banner">
+            <a href={umblerChatUrl} target="_blank" rel="noopener noreferrer" className="umbler-chat-link" title="Abrir conversa no Umbler">
+              Abrir conversa no Umbler ↗
+            </a>
+          </div>
+        )}
         {whatsappMessages.length > 0 ? (
           <div className="whatsapp-messages-list">
             {whatsappMessages.map((msg) => (
